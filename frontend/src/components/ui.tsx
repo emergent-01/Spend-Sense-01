@@ -166,20 +166,48 @@ export function CatIcon({ category, size = 40 }: { category: string; size?: numb
   );
 }
 
-export function TxRow({ tx, onPress }: { tx: Tx; onPress?: () => void }) {
+export function TxRow({
+  tx,
+  onPress,
+  onLongPress,
+  onToggleBusiness,
+  selectMode,
+  selected,
+}: {
+  tx: Tx;
+  onPress?: () => void;
+  onLongPress?: () => void;
+  onToggleBusiness?: () => void;
+  selectMode?: boolean;
+  selected?: boolean;
+}) {
   const s = useUi();
   const { colors } = useTheme();
   const credit = tx.direction === "credit";
   const sub = [tx.category, dayjs(tx.ts).format("h:mm A"), tx.bank, tx.card_last4 ? `••${tx.card_last4}` : tx.mode === "upi" ? "UPI" : null]
     .filter(Boolean)
     .join(" · ");
+  const showTag = !!onToggleBusiness && !credit && tx.category !== "Transfer / P2P";
   return (
     <Pressable
       testID={`tx-row-${tx.id}`}
       onPress={onPress}
-      style={({ pressed }) => [s.row, tx.needs_review && s.rowReview, pressed && { backgroundColor: colors.surfaceTertiary }]}
+      onLongPress={onLongPress}
+      delayLongPress={350}
+      style={({ pressed }) => [
+        s.row,
+        tx.needs_review && s.rowReview,
+        selected && { backgroundColor: colors.brandTertiary },
+        pressed && !selected && { backgroundColor: colors.surfaceTertiary },
+      ]}
     >
-      <CatIcon category={tx.category} />
+      {selectMode ? (
+        <View testID={`tx-select-${tx.id}`} style={[s.check, selected && s.checkOn]}>
+          {selected && <Icon name="checkmark" size={20} color={colors.onBrandPrimary} />}
+        </View>
+      ) : (
+        <CatIcon category={tx.category} />
+      )}
       <View style={{ flex: 1, minWidth: 0 }}>
         <T v="label" numberOfLines={1}>
           {tx.merchant}
@@ -187,18 +215,31 @@ export function TxRow({ tx, onPress }: { tx: Tx; onPress?: () => void }) {
         <T v="caption" numberOfLines={1}>
           {sub}
         </T>
-        {(tx.needs_review || tx.reimbursable || tx.business) && (
+        {(tx.needs_review || tx.reimbursable || (tx.business && !showTag)) && (
           <View style={{ flexDirection: "row", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
             {tx.needs_review && <Badge label="Needs review" tone="warning" />}
-            {tx.business && <Badge label="Business" tone="muted" />}
+            {tx.business && !showTag && <Badge label="Business" tone="muted" />}
             {tx.reimbursable && <Badge label="Reimbursable" tone="brand" />}
           </View>
         )}
       </View>
-      <T v="amount" style={{ color: credit ? colors.success : colors.onSurface }}>
-        {credit ? "+" : "−"}
-        {inr(tx.amount, true)}
-      </T>
+      <View style={{ alignItems: "flex-end", gap: 6 }}>
+        <T v="amount" style={{ color: credit ? colors.success : colors.onSurface }}>
+          {credit ? "+" : "−"}
+          {inr(tx.amount, true)}
+        </T>
+        {showTag && (
+          <Pressable
+            testID={`tx-tag-toggle-${tx.id}`}
+            onPress={selectMode ? onPress : onToggleBusiness}
+            hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
+            style={({ pressed }) => [s.tag, tx.business && s.tagBiz, pressed && { opacity: 0.7 }]}
+          >
+            <Icon name={tx.business ? "briefcase-outline" : "person-outline"} size={12} color={tx.business ? colors.warning : colors.onBrandTertiary} />
+            <Text style={[s.tagText, { color: tx.business ? colors.warning : colors.onBrandTertiary }]}>{tx.business ? "Business" : "Personal"}</Text>
+          </Pressable>
+        )}
+      </View>
     </Pressable>
   );
 }
@@ -381,5 +422,20 @@ const useUi = makeStyles((c) => ({
   chipTextOn: { color: c.onBrandPrimary },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, paddingHorizontal: 16, backgroundColor: c.surface },
   rowReview: { borderLeftWidth: 3, borderLeftColor: c.warning },
+  check: { width: 40, height: 40, borderRadius: 20, borderWidth: 2, borderColor: c.borderStrong, alignItems: "center", justifyContent: "center" },
+  checkOn: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  tag: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    height: 26,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: c.brandTertiary,
+    borderWidth: 1,
+    borderColor: c.brandSecondary,
+  },
+  tagBiz: { backgroundColor: c.warningSoft, borderColor: c.warning },
+  tagText: { fontFamily: fonts.text, fontSize: 11, fontWeight: "500" },
   header: { backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.divider, paddingBottom: 4 },
 }));

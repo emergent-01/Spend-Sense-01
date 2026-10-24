@@ -10,6 +10,7 @@ import { inr, monthLabel } from "@/src/format";
 import { makeStyles, useTheme } from "@/src/theme";
 import { usesNativeTabs } from "@/src/navigation";
 import { useToast } from "@/src/toast";
+import { AddCategoryChip } from "@/src/components/AddCategory";
 
 type BudgetsResp = { month: string; items: Budget[]; total_budget: number; total_spent_budgeted: number; total_spent: number };
 
@@ -104,6 +105,9 @@ export default function Budgets() {
                   )}
                 </Pressable>
               ))}
+            </View>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <AddCategoryChip testID="budgets-add-category" />
             </View>
           </Page>
         </ScrollView>

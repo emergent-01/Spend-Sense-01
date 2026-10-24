@@ -28,6 +28,12 @@ Auto expense tracker for India: Android app reads transaction SMS (12-month back
 - Paste SMS → /api/sms/preview → editable confirmation cards → /api/sms/confirm (feeds merchant learning, incl. original parsed name)
 - Tested: 26/26 backend + all frontend flows
 
+## Iteration 3 (Oct 2026)
+- Custom categories (custom_categories collection): create from edit sheet / Budgets / Categories screen, rename (cascades to txs, budgets, rules), delete (txs → Other); usable in every picker and budgetable
+- Inline Personal/Business badge on Activity rows (one-tap flip, learns for merchant's future txs)
+- Batch select mode (long-press or select icon) → tag many Personal/Business via POST /api/transactions/batch-tag, learns per merchant
+- Tested: 27/27 backend + all frontend flows
+
 ## Backlog
 - P1: verify native SMS module on a real Android build; Play Store SMS-permission declaration
 - P1: show parsed details in paste result; weekly summary refresh after new alerts

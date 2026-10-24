@@ -7,7 +7,9 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import dayjs from "dayjs";
 import { api, type Tx } from "@/src/api";
 import { Badge, Btn, Card, CatIcon, Chip, ErrorState, Loading, Page, ScreenHeader, T, inputStyle } from "@/src/components/ui";
-import { DEBIT_CATEGORIES, INCOME_CATEGORIES, inr } from "@/src/format";
+import { inr } from "@/src/format";
+import { useCategories } from "@/src/use-categories";
+import { AddCategoryChip } from "@/src/components/AddCategory";
 import { makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
 
@@ -21,6 +23,7 @@ export default function TransactionDetail() {
   const toast = useToast();
   const q = useQuery({ queryKey: ["tx", id], queryFn: () => api<Tx>(`/transactions/${id}`) });
   const [remember, setRemember] = useState(true);
+  const catList = useCategories();
   const [rememberBiz, setRememberBiz] = useState(true);
   const [note, setNote] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -57,7 +60,7 @@ export default function TransactionDetail() {
     onError: (e: Error) => toast(e.message, "error"),
   });
   const t = q.data;
-  const cats = t?.direction === "credit" ? INCOME_CATEGORIES : DEBIT_CATEGORIES;
+  const cats = t?.direction === "credit" ? catList.income : catList.debit;
 
   return (
     <View style={styles.root}>
@@ -123,7 +126,15 @@ export default function TransactionDetail() {
                     onPress={() => patch.mutate({ category: c, apply_to_merchant: remember })}
                   />
                 ))}
+                {t.direction === "debit" && (
+                  <AddCategoryChip testID="tx-add-category" onCreated={(name) => patch.mutate({ category: name, apply_to_merchant: false })} />
+                )}
               </View>
+              {t.direction === "debit" && (
+                <Pressable testID="tx-manage-categories" onPress={() => router.push("/categories")} hitSlop={6} style={{ alignSelf: "flex-start", minHeight: 32, justifyContent: "center" }}>
+                  <T v="caption" style={{ color: colors.brandPrimary }}>Rename or delete custom categories</T>
+                </Pressable>
+              )}
               {t.direction === "debit" && t.merchant_key && (
                 <View style={styles.switchRow}>
                   <View style={{ flex: 1 }}>

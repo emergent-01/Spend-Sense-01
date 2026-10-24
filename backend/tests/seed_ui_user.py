@@ -11,7 +11,7 @@ API = os.environ["EXPO_PUBLIC_BACKEND_URL"].rstrip("/") + "/api"
 db = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 uid, tok = "TEST_ui_user", "TEST_ui_session_token"
 now = datetime.now(timezone.utc)
-for col in ["transactions", "merchant_rules", "sms_seen", "review_items", "recurring_overrides", "alerts", "budgets"]:
+for col in ["transactions", "merchant_rules", "sms_seen", "review_items", "recurring_overrides", "alerts", "budgets", "custom_categories"]:
     db[col].delete_many({"user_id": uid})
 db.users.update_one({"user_id": uid}, {"$set": {"user_id": uid, "email": "test_ui_user@example.com", "name": "UI Tester",
                                                 "monthly_income": 80000, "created_at": now}}, upsert=True)

@@ -7,7 +7,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import dayjs from "dayjs";
 import { api, type Tx } from "@/src/api";
 import { Btn, Card, Chip, Empty, ErrorState, Loading, Page, ScreenHeader, SectionTitle, T, TxRow, inputStyle } from "@/src/components/ui";
-import { DEBIT_CATEGORIES, INCOME_CATEGORIES } from "@/src/format";
+import { useCategories } from "@/src/use-categories";
 import { makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
 
@@ -61,6 +61,7 @@ export default function Review() {
 function QuickCategorize({ tx }: { tx: Tx }) {
   const qc = useQueryClient();
   const toast = useToast();
+  const catList = useCategories();
   const m = useMutation({
     mutationFn: (category: string) => api<{ updated_others: number }>(`/transactions/${tx.id}`, { method: "PATCH", body: { category, apply_to_merchant: true } }),
     onSuccess: (r, c) => {
@@ -72,7 +73,7 @@ function QuickCategorize({ tx }: { tx: Tx }) {
     <View style={{ borderTopWidth: 1, borderTopColor: "transparent" }}>
       <TxRow tx={tx} onPress={() => router.push(`/transaction/${tx.id}`)} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ height: 48, flexGrow: 0 }} contentContainerStyle={{ gap: 8, paddingHorizontal: 16, alignItems: "center" }}>
-        {(tx.direction === "credit" ? INCOME_CATEGORIES : DEBIT_CATEGORIES).map((c) => (
+        {(tx.direction === "credit" ? catList.income : catList.debit).map((c) => (
           <Chip key={c} testID={`review-quick-${tx.id}-${c}`} label={c} onPress={() => m.mutate(c)} />
         ))}
       </ScrollView>
@@ -86,6 +87,7 @@ function UnparsedCard({ item }: { item: Unparsed }) {
   const { colors } = useTheme();
   const qc = useQueryClient();
   const toast = useToast();
+  const catList = useCategories();
   const guess = item.body.match(/(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i)?.[1]?.replace(/,/g, "") ?? "";
   const [amount, setAmount] = useState(guess);
   const [merchant, setMerchant] = useState("");
@@ -146,7 +148,7 @@ function UnparsedCard({ item }: { item: Unparsed }) {
         />
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 8 }}>
-        {(direction === "credit" ? INCOME_CATEGORIES : DEBIT_CATEGORIES).map((c) => (
+        {(direction === "credit" ? catList.income : catList.debit).map((c) => (
           <Chip key={c} testID={`unparsed-cat-${item.id}-${c}`} label={c} selected={category === c} onPress={() => setCategory(c)} />
         ))}
       </ScrollView>

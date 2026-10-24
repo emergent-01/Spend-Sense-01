@@ -1,6 +1,6 @@
 import { Platform } from "react-native";
 import { Redirect, Tabs } from "expo-router";
-import { NativeTabs } from "expo-router/unstable-native-tabs";
+import { NativeTabs } from "expo-router/native-tabs";
 import { useAuth } from "@/src/auth";
 import { usesNativeTabs } from "@/src/navigation";
 import { Icon } from "@/src/components/ui";

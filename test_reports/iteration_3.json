@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 3 (custom categories + inline/batch Personal/Business tagging + per-merchant learning). Backend: new pytest suite test_iteration3_categories_tags.py, 13/13 passing, and the iteration-2 regression suite still passes (27/27 total). Covered: categories CRUD with validation (409 for names matching built-in or existing custom, case-insensitive; 400 for empty or 31+ chars), rename and delete cascading to transactions, budgets and merchant_rules, cross-user isolation, custom categories in tx POST/PATCH, sms/confirm and budgets, inline learn_business only affecting future transactions, and batch-tag (ignores credits, other users' and invalid ids; merchants_learned; future SMS inherit the tag). Frontend (390x844, isolated TEST_ui_user): inline badge flip works without opening the edit sheet and shows a toast. Batch mode works via long-press and the select icon (select all, then Clear and Done). Batch Business tagged rows and the totals updated. Edit sheet add-category created and applied the category; the duplicate 'food' showed an error toast; the manage link opens /categories. On /categories, add, rename (including the duplicate error) and delete with confirm all work. The Budgets custom card appears and is budgetable, budgets-add-category creates a card, and the Activity custom category filter chip works. No blocking bugs found. Deprecated API detected: expo-router/unstable-native-tabs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/categories/{id}", "issue": "merchant_rules with only that category are left as empty docs (only updated_at). They do no harm but stay in the database."},
+      {"endpoint": "PATCH /api/transactions/{id}", "issue": "If the edit sheet's 'Same tag for all' is OFF and a learned merchant business rule already exists (e.g. from an inline flip), changing the tag does not update or clear the rule. Future SMS from that merchant keep the old tag, which may surprise users."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Category delete toast", "issue": "Pluralization: '1 transactions moved to Other'", "testID": "category-delete-confirm-{id}", "priority": "low"},
+      {"component": "Edit tx add-category", "issue": "The success toast for a new category ('added — it's now in every list') is replaced at once by the 'Moved to X' toast, so the user never sees it. Also, the category is applied with apply_to_merchant equal to the Remember switch, which defaults ON, so creating a category silently re-tags every past transaction from that merchant.", "testID": "tx-add-category-save", "priority": "low"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Activity", "issues": ["tx-tag-toggle badge is 84x26 (about 42px tall with hitSlop 8), slightly below the 44pt touch target", "Toasts sit over the header, covering the Select all / Done buttons in select mode for a few seconds", "Transfer/P2P debit rows also show the Personal/Business badge, which may not make sense for self-transfers"]}
+    ],
+    "react_native_issues": [
+      {"component": "expo-router/unstable-native-tabs", "issue": "Deprecated import (Metro warns: use expo-router/native-tabs). Reference: /app/frontend/app/(tabs)/_layout.tsx:3"}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration3_categories_tags.py", "/app/backend/tests/test_iteration2_api.py", "/app/test_reports/pytest/pytest_iter3.xml"],
+  "action_items": [
+    "Change the import in app/(tabs)/_layout.tsx:3 from 'expo-router/unstable-native-tabs' to 'expo-router/native-tabs'",
+    "Optional: fix the pluralization in the category delete toast",
+    "Optional: when creating a category from the edit sheet, consider a combined toast; consider not applying it merchant-wide by default",
+    "Optional: when changing the tag in the edit sheet with 'Same tag for all' OFF, consider clearing or updating an existing merchant business rule",
+    "Optional: raise the tx-tag-toggle hit area to 44pt"
+  ],
+  "critical_code_review_comments": [
+    "The new backend code is clean: Pydantic validation, user_id-scoped queries everywhere, ObjectId validation with 404s, no _id leaks.",
+    "rename_category correctly excludes itself, so a case-only rename works; the cascade covers transactions, budgets and merchant_rules.",
+    "batch_tag correctly filters on direction=debit and user_id; ids are capped at 1-500 via Field."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration3_categories_tags.py (new)", "/app/backend/tests/seed_ui_user.py (also clears custom_categories)"],
+  "success_rate": {"backend": "100% (27/27 incl. iteration 2 regression)", "frontend": "100% of requested flows"},
+  "seed_data_creation": "pytest creates and cleans up its own TEST_user_* users. UI tests used TEST_ui_user / TEST_ui_session_token, which was re-seeded afterwards to a clean state. Demo user data was not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && pytest tests/test_iteration3_categories_tags.py tests/test_iteration2_api.py -n 0. For UI, run python tests/seed_ui_user.py, then localStorage.setItem('auth_token', JSON.stringify('TEST_ui_session_token')). The container clock is Oct 2026, and sample SMS dated 18-10-25 fall outside the current month in budgets.",
+  "rca_of_issue": ""
+}

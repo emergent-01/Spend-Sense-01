@@ -4,7 +4,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import { api } from "@/src/api";
 import { Badge, Btn, Card, Chip, T, inputStyle } from "@/src/components/ui";
-import { DEBIT_CATEGORIES, INCOME_CATEGORIES, inr } from "@/src/format";
+import { inr } from "@/src/format";
+import { useCategories } from "@/src/use-categories";
 import { makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
 
@@ -33,6 +34,7 @@ export function PastePreviewCard({ item, index }: { item: Preview; index: number
   const { colors } = useTheme();
   const qc = useQueryClient();
   const toast = useToast();
+  const catList = useCategories();
   const [forceAdd, setForceAdd] = useState(false);
   const [amount, setAmount] = useState(item.amount ? String(item.amount) : "");
   const [merchant, setMerchant] = useState(item.merchant ?? "");
@@ -96,7 +98,7 @@ export function PastePreviewCard({ item, index }: { item: Preview; index: number
     );
   }
 
-  const cats = direction === "credit" ? INCOME_CATEGORIES : DEBIT_CATEGORIES;
+  const cats = direction === "credit" ? catList.income : catList.debit;
   const valid = Number(amount) > 0 && merchant.trim().length > 0;
 
   return (

@@ -237,9 +237,72 @@ async def put_settings(body: SettingsIn, user=Depends(current_user)):
     return user_out(await db.users.find_one({"_id": user["_id"]}))
 
 
+# ---------------------------------------------------------------- categories (built-in + user custom)
+class CategoryIn(BaseModel):
+    name: str
+
+
+async def custom_categories(uid: str) -> list:
+    return await db.custom_categories.find({"user_id": uid}).sort("created_at", 1).to_list(100)
+
+
+async def spend_categories(uid: str) -> list:
+    return CATEGORIES + [c["name"] for c in await custom_categories(uid)]
+
+
+async def clean_category_name(uid: str, name: str, exclude_id=None) -> str:
+    n = re.sub(r"\s+", " ", name or "").strip()
+    if not 1 <= len(n) <= 30:
+        raise HTTPException(400, "Category name must be 1–30 characters")
+    taken = {c.lower() for c in CATEGORIES + SPEND_EXCLUDED + INCOME_CATEGORIES}
+    taken |= {c["name"].lower() for c in await custom_categories(uid) if c["_id"] != exclude_id}
+    if n.lower() in taken:
+        raise HTTPException(409, f"“{n}” already exists")
+    return n
+
+
+async def get_custom(uid: str, cid: str) -> dict:
+    c = await db.custom_categories.find_one({"_id": ObjectId(cid), "user_id": uid}) if ObjectId.is_valid(cid) else None
+    if not c:
+        raise HTTPException(404, "Category not found")
+    return c
+
+
 @api.get("/categories")
-async def categories():
-    return {"spend": CATEGORIES, "excluded": SPEND_EXCLUDED, "income": INCOME_CATEGORIES}
+async def categories(user=Depends(current_user)):
+    custom = await custom_categories(user["id"])
+    return {"spend": CATEGORIES + [c["name"] for c in custom], "builtin": CATEGORIES, "excluded": SPEND_EXCLUDED,
+            "income": INCOME_CATEGORIES, "custom": [{"id": str(c["_id"]), "name": c["name"]} for c in custom]}
+
+
+@api.post("/categories", status_code=201)
+async def create_category(body: CategoryIn, user=Depends(current_user)):
+    name = await clean_category_name(user["id"], body.name)
+    r = await db.custom_categories.insert_one({"user_id": user["id"], "name": name, "created_at": datetime.now(timezone.utc)})
+    return {"id": str(r.inserted_id), "name": name}
+
+
+@api.patch("/categories/{cid}")
+async def rename_category(cid: str, body: CategoryIn, user=Depends(current_user)):
+    uid = user["id"]
+    c = await get_custom(uid, cid)
+    name = await clean_category_name(uid, body.name, exclude_id=c["_id"])
+    old = c["name"]
+    await db.custom_categories.update_one({"_id": c["_id"]}, {"$set": {"name": name}})
+    for coll in (db.transactions, db.budgets, db.merchant_rules):
+        await coll.update_many({"user_id": uid, "category": old}, {"$set": {"category": name}})
+    return {"id": cid, "name": name}
+
+
+@api.delete("/categories/{cid}")
+async def delete_category(cid: str, user=Depends(current_user)):
+    uid = user["id"]
+    c = await get_custom(uid, cid)
+    moved = await db.transactions.update_many({"user_id": uid, "category": c["name"]}, {"$set": {"category": "Other"}})
+    await db.budgets.delete_many({"user_id": uid, "category": c["name"]})
+    await db.merchant_rules.update_many({"user_id": uid, "category": c["name"]}, {"$unset": {"category": ""}})
+    await db.custom_categories.delete_one({"_id": c["_id"]})
+    return {"ok": True, "moved_to_other": moved.modified_count}
 
 # ---------------------------------------------------------------- ingestion
 class SmsIn(BaseModel):
@@ -276,8 +339,8 @@ async def apply_rules(uid: str, p: dict, body: str):
 
 
 async def learn_merchant(uid: str, mk: Optional[str], category: Optional[str] = None, business: Optional[bool] = None,
-                         exclude_id=None) -> int:
-    """Remember category and/or business tag for a merchant; apply to all its debit transactions."""
+                         exclude_id=None, apply_past: bool = True) -> int:
+    """Remember category and/or business tag for a merchant (future SMS); optionally re-tag its past debits too."""
     if not mk or (category is None and business is None):
         return 0
     s = {"updated_at": datetime.now(timezone.utc)}
@@ -289,6 +352,8 @@ async def learn_merchant(uid: str, mk: Optional[str], category: Optional[str] = 
         s["business"] = business
         tx_set["business"] = business
     await db.merchant_rules.update_one({"user_id": uid, "merchant_key": mk}, {"$set": s}, upsert=True)
+    if not apply_past:
+        return 0
     q = {"user_id": uid, "merchant_key": mk, "direction": "debit"}
     if exclude_id is not None:
         q["_id"] = {"$ne": exclude_id}
@@ -404,7 +469,7 @@ async def confirm_sms(body: ConfirmIn, user=Depends(current_user)):
     text = body.body.strip()
     if body.direction not in ("debit", "credit"):
         raise HTTPException(400, "direction must be debit or credit")
-    valid_category(body.direction, body.category)
+    await valid_category(user["id"], body.direction, body.category)
     h = sms_hash(uid, body.sender, text)
     if await db.sms_seen.find_one({"user_id": uid, "hash": h}):
         raise HTTPException(409, "This SMS was already added")
@@ -500,15 +565,22 @@ class TxPatch(BaseModel):
     category: Optional[str] = None
     apply_to_merchant: bool = False
     business: Optional[bool] = None
-    apply_business_to_merchant: bool = False
+    apply_business_to_merchant: bool = False  # remember for future AND re-tag past transactions
+    learn_business: bool = False  # remember for future transactions only (inline flip)
     reimbursable: Optional[bool] = None
     recurring: Optional[bool] = None
     note: Optional[str] = None
     merchant: Optional[str] = None
 
 
-def valid_category(direction: str, cat: str):
-    allowed = ALL_DEBIT_CATEGORIES if direction == "debit" else INCOME_CATEGORIES
+class BatchTagIn(BaseModel):
+    ids: List[str] = Field(min_length=1, max_length=500)
+    business: bool
+    learn: bool = True
+
+
+async def valid_category(uid: str, direction: str, cat: str):
+    allowed = (await spend_categories(uid)) + SPEND_EXCLUDED if direction == "debit" else INCOME_CATEGORIES
     if cat not in allowed:
         raise HTTPException(400, f"Invalid category for {direction}")
 
@@ -562,7 +634,7 @@ async def tx_detail(uid: str, d: dict) -> dict:
 async def create_transaction(body: TxCreate, user=Depends(current_user)):
     if body.direction not in ("debit", "credit"):
         raise HTTPException(400, "direction must be debit or credit")
-    valid_category(body.direction, body.category)
+    await valid_category(user["id"], body.direction, body.category)
     ts = datetime.now(timezone.utc)
     if body.date:
         try:
@@ -597,7 +669,7 @@ async def patch_transaction(tid: str, body: TxPatch, user=Depends(current_user))
     if body.reimbursable is not None:
         upd["reimbursable"] = body.reimbursable
     if body.category:
-        valid_category(d["direction"], body.category)
+        await valid_category(user["id"], d["direction"], body.category)
         upd.update({"category": body.category, "needs_review": False, "is_salary": body.category == "Income"})
     mk = upd.get("merchant_key") or d.get("merchant_key")
     if body.business is not None:
@@ -610,6 +682,8 @@ async def patch_transaction(tid: str, body: TxPatch, user=Depends(current_user))
             category=body.category if body.category and body.apply_to_merchant else None,
             business=body.business if body.business is not None and body.apply_business_to_merchant else None,
             exclude_id=d["_id"])
+        if body.business is not None and body.learn_business and not body.apply_business_to_merchant:
+            await learn_merchant(user["id"], mk, business=body.business, apply_past=False)
     if body.recurring is not None:
         if not mk:
             raise HTTPException(400, "This transaction has no merchant to track as recurring")
@@ -624,6 +698,21 @@ async def patch_transaction(tid: str, body: TxPatch, user=Depends(current_user))
     out = await tx_detail(user["id"], await db.transactions.find_one({"_id": d["_id"]}))
     out["updated_others"] = updated_others
     return out
+
+
+@api.post("/transactions/batch-tag")
+async def batch_tag(body: BatchTagIn, user=Depends(current_user)):
+    """Tag many expenses Personal/Business at once (e.g. a work trip); learn per merchant for future SMS."""
+    uid = user["id"]
+    oids = [ObjectId(i) for i in body.ids if ObjectId.is_valid(i)]
+    q = {"user_id": uid, "_id": {"$in": oids}, "direction": "debit"}
+    docs = await db.transactions.find(q, {"merchant_key": 1}).to_list(500)
+    r = await db.transactions.update_many(q, {"$set": {"business": body.business}})
+    merchants = {d["merchant_key"] for d in docs if d.get("merchant_key")}
+    if body.learn:
+        for mk in merchants:
+            await learn_merchant(uid, mk, business=body.business, apply_past=False)
+    return {"updated": r.modified_count, "matched": len(docs), "merchants_learned": len(merchants) if body.learn else 0}
 
 
 @api.delete("/transactions/{tid}")
@@ -656,7 +745,7 @@ async def resolve_review(rid: str, body: ResolveIn, user=Depends(current_user)):
         raise HTTPException(404, "Item not found")
     if body.direction not in ("debit", "credit"):
         raise HTTPException(400, "direction must be debit or credit")
-    valid_category(body.direction, body.category)
+    await valid_category(user["id"], body.direction, body.category)
     raw = dec(item["enc"])
     merchant = clean_merchant(body.merchant) or body.merchant.strip().upper()[:40]
     t = TxDoc(user_id=user["id"], ts=aware(item["ts"]), amount=round(body.amount, 2), direction=body.direction,
@@ -704,7 +793,7 @@ async def compute_budgets(uid: str, month: Optional[str]) -> list:
     budgets = {b["category"]: b["amount"] for b in await db.budgets.find({"user_id": uid}).to_list(50)}
     day, dim = month_progress(m)
     out = []
-    for c in CATEGORIES:
+    for c in await spend_categories(uid):
         amt = budgets.get(c, 0)
         spent = spend.get(c, {}).get("total", 0)
         pct = round(spent / amt * 100, 1) if amt else 0
@@ -728,7 +817,7 @@ async def get_budgets(month: Optional[str] = None, user=Depends(current_user)):
 
 @api.put("/budgets")
 async def put_budget(body: BudgetIn, user=Depends(current_user)):
-    if body.category not in CATEGORIES:
+    if body.category not in await spend_categories(user["id"]):
         raise HTTPException(400, "Invalid category")
     if body.amount == 0:
         await db.budgets.delete_one({"user_id": user["id"], "category": body.category})
@@ -980,6 +1069,7 @@ app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=["*"],
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
+    await db.custom_categories.create_index([("user_id", 1), ("name", 1)])
     async for u in db.users.find({"user_id": {"$exists": False}}):  # migrate pre-Google accounts
         await db.users.update_one({"_id": u["_id"]}, {"$set": {"user_id": str(u["_id"])}})
     await db.users.create_index("user_id", unique=True)

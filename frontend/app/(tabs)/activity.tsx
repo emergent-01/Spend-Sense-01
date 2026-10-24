@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, RefreshControl, SectionList, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, type Tx } from "@/src/api";
 import { Chip, ChipRow, Empty, ErrorState, Icon, IconBtn, Loading, Page, T, TxRow } from "@/src/components/ui";
-import { currentMonth, dayLabel, inr, monthLabel, P2P, shiftMonth, SPEND_CATEGORIES } from "@/src/format";
+import { currentMonth, dayLabel, inr, monthLabel, P2P, shiftMonth } from "@/src/format";
+import { useCategories } from "@/src/use-categories";
+import { useToast } from "@/src/toast";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { usesNativeTabs } from "@/src/navigation";
 
@@ -51,6 +53,62 @@ export default function Activity() {
       return api<Tx[]>(`/transactions?${p.toString()}`);
     },
   });
+  const key = ["transactions", month, filter, category, q];
+  const qc = useQueryClient();
+  const toast = useToast();
+  const catList = useCategories();
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selectable = (query.data ?? []).filter((t) => t.direction === "debit");
+  const allSelected = selectable.length > 0 && selectable.every((t) => selected.has(t.id));
+  const exitSelect = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+  const toggleSelect = (t: Tx) => {
+    if (t.direction !== "debit") return toast("Only expenses can be tagged Personal or Business");
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(t.id)) n.delete(t.id);
+      else n.add(t.id);
+      return n;
+    });
+  };
+  const selectAll = () => setSelected(allSelected ? new Set() : new Set(selectable.map((t) => t.id)));
+
+  // One-tap flip: optimistic, and remembered for this merchant's future transactions.
+  const flip = useMutation({
+    mutationFn: (t: Tx) =>
+      api(`/transactions/${t.id}`, { method: "PATCH", body: { business: !t.business, learn_business: true } }),
+    onMutate: async (t) => {
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<Tx[]>(key);
+      qc.setQueryData<Tx[]>(key, (d) => d?.map((x) => (x.id === t.id ? { ...x, business: !t.business } : x)));
+      return { prev };
+    },
+    onError: (e: Error, _t, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      toast(e.message, "error");
+    },
+    onSuccess: (_r, t) => toast(`${t.merchant} → ${t.business ? "Personal" : "Business"} · future ones too`, "success"),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["overview"] });
+      qc.invalidateQueries({ queryKey: ["transactions"] });
+    },
+  });
+  const batch = useMutation({
+    mutationFn: (business: boolean) =>
+      api<{ updated: number; merchants_learned: number }>("/transactions/batch-tag", {
+        method: "POST",
+        body: { ids: [...selected], business, learn: true },
+      }),
+    onSuccess: (r, business) => {
+      toast(`${selected.size} tagged ${business ? "Business" : "Personal"} · ${r.merchants_learned} merchant${r.merchants_learned === 1 ? "" : "s"} remembered`, "success");
+      exitSelect();
+      qc.invalidateQueries();
+    },
+    onError: (e: Error) => toast(e.message, "error"),
+  });
 
   const sections = useMemo(() => {
     const map = new Map<string, Tx[]>();
@@ -83,8 +141,20 @@ export default function Activity() {
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + 4 }]}>
         <Page>
+          {selectMode ? (
+            <View style={styles.titleRow}>
+              <T v="title" style={{ flex: 1 }}>Select</T>
+              <Pressable testID="activity-select-all" onPress={selectAll} hitSlop={6} style={styles.textBtn}>
+                <T v="label" style={{ color: colors.brandPrimary }}>{allSelected ? "Clear" : "Select all"}</T>
+              </Pressable>
+              <Pressable testID="activity-select-cancel" onPress={exitSelect} hitSlop={6} style={styles.textBtn}>
+                <T v="label">Done</T>
+              </Pressable>
+            </View>
+          ) : (
           <View style={styles.titleRow}>
             <T v="title" style={{ flex: 1 }}>Activity</T>
+            <IconBtn testID="activity-select-mode" icon="checkmark-circle-outline" onPress={() => setSelectMode(true)} />
             <IconBtn testID="activity-prev-month" icon="chevron-back" onPress={() => setMonth(shiftMonth(month, -1))} />
             <T testID="activity-month-label" v="label" style={{ minWidth: 110, textAlign: "center" }}>{monthLabel(month)}</T>
             <IconBtn
@@ -93,6 +163,7 @@ export default function Activity() {
               onPress={() => month < currentMonth() && setMonth(shiftMonth(month, 1))}
             />
           </View>
+          )}
           <View style={styles.search}>
             <Icon name="search" size={18} color={colors.muted} />
             <TextInput
@@ -123,7 +194,7 @@ export default function Activity() {
                 }}
               />
             ))}
-            {[...SPEND_CATEGORIES, P2P].map((c) => (
+            {[...catList.spend, P2P].map((c) => (
               <Chip
                 key={c}
                 testID={`activity-cat-${c}`}
@@ -158,7 +229,7 @@ export default function Activity() {
           sections={sections}
           keyExtractor={(t) => t.id}
           stickySectionHeadersEnabled
-          contentContainerStyle={{ paddingBottom: bottomChrome + 24 }}
+          contentContainerStyle={{ paddingBottom: bottomChrome + (selectMode ? 96 : 24) }}
           refreshControl={<RefreshControl refreshing={query.isRefetching} onRefresh={() => query.refetch()} tintColor={colors.brandPrimary} />}
           renderSectionHeader={({ section }) => (
             <View style={styles.sectionHeader}>
@@ -170,7 +241,18 @@ export default function Activity() {
           )}
           renderItem={({ item }) => (
             <Page>
-              <TxRow tx={item} onPress={() => router.push(`/transaction/${item.id}`)} />
+              <TxRow
+                tx={item}
+                selectMode={selectMode}
+                selected={selected.has(item.id)}
+                onPress={() => (selectMode ? toggleSelect(item) : router.push(`/transaction/${item.id}`))}
+                onLongPress={() => {
+                  if (item.direction !== "debit") return;
+                  setSelectMode(true);
+                  setSelected(new Set([item.id]));
+                }}
+                onToggleBusiness={() => flip.mutate(item)}
+              />
             </Page>
           )}
           ListEmptyComponent={
@@ -183,6 +265,33 @@ export default function Activity() {
           }
         />
       )}
+      {selectMode && (
+        <View style={[styles.batchBar, { bottom: bottomChrome + 16 }]} testID="batch-bar">
+          <T v="label" style={{ color: colors.onSurfaceInverse }} testID="batch-count">
+            {selected.size} selected
+          </T>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Pressable
+              testID="batch-tag-personal"
+              disabled={!selected.size || batch.isPending}
+              onPress={() => batch.mutate(false)}
+              style={[styles.batchBtn, !selected.size && { opacity: 0.5 }]}
+            >
+              <Icon name="person-outline" size={16} color={colors.onBrandTertiary} />
+              <T v="label" style={{ color: colors.onBrandTertiary }}>Personal</T>
+            </Pressable>
+            <Pressable
+              testID="batch-tag-business"
+              disabled={!selected.size || batch.isPending}
+              onPress={() => batch.mutate(true)}
+              style={[styles.batchBtn, styles.batchBiz, !selected.size && { opacity: 0.5 }]}
+            >
+              <Icon name="briefcase-outline" size={16} color={colors.onWarning} />
+              <T v="label" style={{ color: colors.onWarning }}>Business</T>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -190,7 +299,31 @@ export default function Activity() {
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surface },
   header: { backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.divider },
-  titleRow: { flexDirection: "row", alignItems: "center", paddingLeft: 16, paddingRight: 4 },
+  titleRow: { flexDirection: "row", alignItems: "center", paddingLeft: 16, paddingRight: 4, minHeight: 48 },
+  textBtn: { minHeight: 44, justifyContent: "center", paddingHorizontal: 12 },
+  batchBar: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    maxWidth: 560,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    backgroundColor: c.surfaceInverse,
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingLeft: 16,
+    paddingRight: 10,
+    shadowColor: c.surfaceInverse,
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  batchBtn: { flexDirection: "row", alignItems: "center", gap: 6, height: 44, paddingHorizontal: 14, borderRadius: 999, backgroundColor: c.brandTertiary },
+  batchBiz: { backgroundColor: c.warning },
   search: {
     flexDirection: "row",
     alignItems: "center",

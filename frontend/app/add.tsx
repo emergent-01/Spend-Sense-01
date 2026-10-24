@@ -7,7 +7,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import dayjs from "dayjs";
 import { api } from "@/src/api";
 import { Btn, Card, Chip, Page, ScreenHeader, T, inputStyle } from "@/src/components/ui";
-import { DEBIT_CATEGORIES, INCOME_CATEGORIES } from "@/src/format";
+import { useCategories } from "@/src/use-categories";
 import { makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
 import { PastePreviewCard, type Preview } from "@/src/components/PastePreview";
@@ -22,6 +22,7 @@ export default function Add() {
   const toast = useToast();
   const sample = useLoadSample();
   const [tab, setTab] = useState<"paste" | "manual">("paste");
+  const catList = useCategories();
   const [sms, setSms] = useState("");
   const [sender, setSender] = useState("");
   const [previews, setPreviews] = useState<Preview[] | null>(null);
@@ -72,7 +73,7 @@ export default function Add() {
     onError: (e: Error) => toast(e.message, "error"),
   });
 
-  const cats = direction === "credit" ? INCOME_CATEGORIES : DEBIT_CATEGORIES;
+  const cats = direction === "credit" ? catList.income : catList.debit;
   const canManual = Number(amount) > 0 && merchant.trim().length > 0;
 
   return (

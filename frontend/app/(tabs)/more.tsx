@@ -111,6 +111,7 @@ export default function More() {
               sub={review.data ? `${review.data.count} waiting` : "Unparsed or uncategorised"}
               onPress={() => router.push("/review")}
             />
+            <Row testID="more-categories-link" icon="pricetags-outline" title="Categories" sub="Add, rename or delete your own categories" onPress={() => router.push("/categories")} />
             <Row testID="more-export-link" icon="document-text-outline" title="Claim report PDF" sub="Reimbursable spends with bank SMS proof" onPress={() => router.push("/export")} />
             <Row testID="more-alerts-link" icon="notifications-outline" title="Alerts" sub="Budget, recurring and weekly summaries" onPress={() => router.push("/alerts")} />
           </Card>
