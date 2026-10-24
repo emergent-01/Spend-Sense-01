@@ -3,10 +3,12 @@ import { Platform, ScrollView, View } from "react-native";
 import { router } from "expo-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { File, Paths } from "expo-file-system";
+import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import dayjs from "dayjs";
 import { api, type Tx } from "@/src/api";
+import { useAuth } from "@/src/auth";
+import { claimReportHtml } from "@/src/claim-report";
 import { Btn, Card, Empty, ErrorState, IconBtn, Loading, Page, ScreenHeader, T } from "@/src/components/ui";
 import { currentMonth, inr, monthLabel, shiftMonth } from "@/src/format";
 import { makeStyles, useTheme } from "@/src/theme";
@@ -17,6 +19,7 @@ export default function Export() {
   const styles = useStyles();
   const { colors } = useTheme();
   const toast = useToast();
+  const { user } = useAuth();
   const [month, setMonth] = useState<string>(currentMonth());
   const q = useQuery({
     queryKey: ["transactions", month, "reimbursable", null, ""],
@@ -26,31 +29,37 @@ export default function Export() {
 
   const exp = useMutation({
     mutationFn: async () => {
-      const csv = await api<string>(`/export/reimbursable?month=${month}`, { raw: true });
-      const name = `spendsense-reimbursable-${month}.csv`;
+      const html = claimReportHtml(q.data ?? [], month === "all" ? "All time" : monthLabel(month), user?.name ?? null, user?.email);
       if (Platform.OS === "web") {
-        const blob = new Blob([csv], { type: "text/csv" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = name;
-        a.click();
-        URL.revokeObjectURL(url);
+        // print the report from a hidden frame; the browser's "Save as PDF" produces the file
+        const frame = document.createElement("iframe");
+        frame.style.position = "fixed";
+        frame.style.width = "0";
+        frame.style.height = "0";
+        frame.style.border = "0";
+        document.body.appendChild(frame);
+        frame.contentDocument!.open();
+        frame.contentDocument!.write(html);
+        frame.contentDocument!.close();
+        setTimeout(() => {
+          frame.contentWindow!.focus();
+          frame.contentWindow!.print();
+          frame.contentWindow!.addEventListener("afterprint", () => frame.remove());
+          setTimeout(() => frame.remove(), 120000);
+        }, 300);
         return;
       }
-      const file = new File(Paths.cache, name);
-      if (file.exists) file.delete();
-      file.create();
-      file.write(csv);
-      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: "text/csv", dialogTitle: "Share expense claim" });
+      const { uri } = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync())
+        await Sharing.shareAsync(uri, { mimeType: "application/pdf", UTI: "com.adobe.pdf", dialogTitle: "Share claim report" });
     },
-    onSuccess: () => toast("CSV ready", "success"),
+    onSuccess: () => toast(Platform.OS === "web" ? "Choose “Save as PDF” in the print dialog" : "Claim report ready", "success"),
     onError: (e: Error) => toast(e.message, "error"),
   });
 
   return (
     <View style={styles.root}>
-      <ScreenHeader title="Reimbursable export" onBack={() => router.back()} topInset={insets.top} />
+      <ScreenHeader title="Claim report" onBack={() => router.back()} topInset={insets.top} />
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
         <Page style={{ padding: 16, gap: 16 }}>
           <Card style={{ gap: 12 }}>
@@ -70,8 +79,8 @@ export default function Export() {
                 <T v="title">{q.data?.length ?? 0}</T>
               </View>
             </View>
-            <Btn testID="export-csv-button" title="Export CSV" icon="download-outline" disabled={!q.data?.length} loading={exp.isPending} onPress={() => exp.mutate()} />
-            <T v="caption">Columns: Date, Merchant, Amount, Category, Note — ready for your expense claim.</T>
+            <Btn testID="export-pdf-button" title="Create claim report PDF" icon="document-text-outline" disabled={!q.data?.length} loading={exp.isPending} onPress={() => exp.mutate()} />
+            <T v="caption">Date, merchant, amount and category for each item, with the original bank SMS attached as proof.</T>
           </Card>
 
           {q.isLoading ? (

@@ -20,6 +20,14 @@ Auto expense tracker for India: Android app reads transaction SMS (12-month back
 - Reimbursable CSV export (web download / native share); sample SMS loader
 - Tested: 15/15 backend tests + full frontend flows
 
+## Iteration 2 (Oct 2026)
+- Google sign-in only (Emergent-managed), sessions in `user_sessions`; old email accounts linked by email
+- Edit sheet (transaction/[id] modal): category + remember, Personal/Business + same-tag-for-merchant, reimbursable, recurring
+- Personal/Business axis: overview split, Activity filters + totals; "Transfer / P2P" auto-detected and excluded from spend/budgets
+- Claim Report PDF (expo-print on device, print-to-PDF on web) with original SMS proof — replaces CSV in UI
+- Paste SMS → /api/sms/preview → editable confirmation cards → /api/sms/confirm (feeds merchant learning, incl. original parsed name)
+- Tested: 26/26 backend + all frontend flows
+
 ## Backlog
 - P1: verify native SMS module on a real Android build; Play Store SMS-permission declaration
 - P1: show parsed details in paste result; weekly summary refresh after new alerts

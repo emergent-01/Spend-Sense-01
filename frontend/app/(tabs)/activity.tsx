@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, type Tx } from "@/src/api";
 import { Chip, ChipRow, Empty, ErrorState, Icon, IconBtn, Loading, Page, T, TxRow } from "@/src/components/ui";
-import { currentMonth, dayLabel, inr, monthLabel, shiftMonth, SPEND_CATEGORIES } from "@/src/format";
+import { currentMonth, dayLabel, inr, monthLabel, P2P, shiftMonth, SPEND_CATEGORIES } from "@/src/format";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 import { usesNativeTabs } from "@/src/navigation";
 
@@ -13,6 +13,8 @@ const FILTERS = [
   ["all", "All"],
   ["review", "Needs review"],
   ["reimbursable", "Reimbursable"],
+  ["personal", "Personal"],
+  ["business", "Business"],
   ["income", "Income"],
 ] as const;
 
@@ -60,15 +62,17 @@ export default function Activity() {
     return [...map.entries()].map(([k, data]) => ({
       title: dayLabel(data[0].ts),
       key: k,
-      total: data.filter((t) => t.direction === "debit").reduce((s, t) => s + t.amount, 0),
+      total: data.filter((t) => t.direction === "debit" && t.category !== P2P).reduce((s, t) => s + t.amount, 0),
       data,
     }));
   }, [query.data]);
 
   const totals = useMemo(() => {
     const d = query.data ?? [];
+    const spend = d.filter((t) => t.direction === "debit" && t.category !== P2P);
     return {
-      out: d.filter((t) => t.direction === "debit" && t.category !== "Transfer").reduce((s, t) => s + t.amount, 0),
+      out: spend.reduce((s, t) => s + t.amount, 0),
+      business: spend.filter((t) => t.business).reduce((s, t) => s + t.amount, 0),
       inn: d.filter((t) => t.direction === "credit").reduce((s, t) => s + t.amount, 0),
     };
   }, [query.data]);
@@ -119,7 +123,7 @@ export default function Activity() {
                 }}
               />
             ))}
-            {SPEND_CATEGORIES.map((c) => (
+            {[...SPEND_CATEGORIES, P2P].map((c) => (
               <Chip
                 key={c}
                 testID={`activity-cat-${c}`}
@@ -133,9 +137,14 @@ export default function Activity() {
             ))}
           </ChipRow>
           <View style={styles.totals}>
-            <T v="caption" testID="activity-total-out">Out {inr(totals.out)}</T>
-            <T v="caption" testID="activity-total-in" style={{ color: colors.success }}>In {inr(totals.inn)}</T>
-            <T v="caption">{query.data?.length ?? 0} transactions</T>
+            <T v="caption" testID="activity-total-out">Spent {inr(totals.out)}</T>
+            {filter !== "business" && <T v="caption" testID="activity-total-personal">Personal {inr(totals.out - totals.business)}</T>}
+            {filter !== "personal" && (
+              <T v="caption" testID="activity-total-business" style={{ color: colors.warning }}>Business {inr(totals.business)}</T>
+            )}
+            {filter !== "personal" && filter !== "business" && (
+              <T v="caption" testID="activity-total-in" style={{ color: colors.success }}>In {inr(totals.inn)}</T>
+            )}
           </View>
         </Page>
       </View>
@@ -194,6 +203,6 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.surfaceTertiary,
   },
   searchInput: { flex: 1, fontFamily: fonts.text, fontSize: 15, color: c.onSurface, height: 44, outlineStyle: "none" } as any,
-  totals: { flexDirection: "row", gap: 16, paddingHorizontal: 16, paddingBottom: 8 },
+  totals: { flexDirection: "row", flexWrap: "wrap", columnGap: 12, rowGap: 2, paddingHorizontal: 16, paddingBottom: 8 },
   sectionHeader: { backgroundColor: c.surfaceTertiary, paddingVertical: 6 },
 }));

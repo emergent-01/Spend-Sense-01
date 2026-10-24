@@ -187,9 +187,10 @@ export function TxRow({ tx, onPress }: { tx: Tx; onPress?: () => void }) {
         <T v="caption" numberOfLines={1}>
           {sub}
         </T>
-        {(tx.needs_review || tx.reimbursable) && (
-          <View style={{ flexDirection: "row", gap: 6, marginTop: 4 }}>
+        {(tx.needs_review || tx.reimbursable || tx.business) && (
+          <View style={{ flexDirection: "row", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
             {tx.needs_review && <Badge label="Needs review" tone="warning" />}
+            {tx.business && <Badge label="Business" tone="muted" />}
             {tx.reimbursable && <Badge label="Reimbursable" tone="brand" />}
           </View>
         )}

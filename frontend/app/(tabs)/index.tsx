@@ -22,6 +22,8 @@ type Overview = {
   income: number;
   income_source: string;
   spent: number;
+  personal_spent: number;
+  business_spent: number;
   committed: number;
   savings_target: number;
   safe_to_spend: number;
@@ -144,6 +146,35 @@ export default function Home() {
             )}
 
             <BudgetsPreview budgets={d.budgets} day={d.day} dim={d.days_in_month} />
+
+            {d.spent > 0 && (
+              <Card testID="home-personal-business-card" style={{ gap: 12 }}>
+                <SectionTitle title="Personal vs Business" />
+                <View style={{ flexDirection: "row", height: 10, borderRadius: 999, overflow: "hidden", gap: 2 }}>
+                  <View style={{ flex: Math.max(d.personal_spent, 0.0001), backgroundColor: colors.brandPrimary }} />
+                  <View style={{ flex: Math.max(d.business_spent, 0.0001), backgroundColor: colors.warning }} />
+                </View>
+                <View style={{ flexDirection: "row" }}>
+                  {[
+                    ["personal", "Personal", d.personal_spent, colors.brandPrimary],
+                    ["business", "Business", d.business_spent, colors.warning],
+                  ].map(([k, label, v, col]) => (
+                    <Pressable
+                      key={k as string}
+                      testID={`home-split-${k}`}
+                      onPress={() => router.push({ pathname: "/(tabs)/activity", params: { filter: k as string } })}
+                      style={{ flex: 1, gap: 2 }}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: col as string }} />
+                        <T v="caption">{label as string}</T>
+                      </View>
+                      <T v="h2" testID={`home-split-${k}-amount`}>{inr(v as number)}</T>
+                    </Pressable>
+                  ))}
+                </View>
+              </Card>
+            )}
 
             {d.by_category.length > 0 && <CategoryChart data={d.by_category} total={d.spent} />}
 

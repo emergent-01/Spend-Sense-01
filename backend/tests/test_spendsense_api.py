@@ -6,20 +6,31 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 import requests
+from dotenv import load_dotenv
+from pymongo import MongoClient
+
+load_dotenv('/app/backend/.env')
+load_dotenv('/app/frontend/.env')
 
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL").rstrip("/")
 API = f"{BASE_URL}/api"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
+_mongo = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+
+
 def _register():
-    email = f"test_{uuid.uuid4().hex[:8]}@example.com"
-    r = requests.post(f"{API}/auth/register", json={"email": email, "password": "pass1234", "name": "TEST user"})
-    assert r.status_code == 201, r.text
-    d = r.json()
+    """Auth is Google-only now: seed a TEST_ user + session directly in Mongo."""
+    uid = f"TEST_reg_{uuid.uuid4().hex[:10]}"
+    email = f"{uid.lower()}@example.com"
+    tok = f"TEST_tok_{uuid.uuid4().hex}"
+    now = datetime.now(timezone.utc)
+    _mongo.users.insert_one({"user_id": uid, "email": email, "name": "TEST user", "created_at": now})
+    _mongo.user_sessions.insert_one({"session_token": tok, "user_id": uid, "expires_at": now + timedelta(days=1), "created_at": now})
     s = requests.Session()
-    s.headers.update({"Authorization": f"Bearer {d['access_token']}"})
-    return s, email, d
+    s.headers.update({"Authorization": f"Bearer {tok}"})
+    return s, email, {"user": {"email": email, "id": uid}, "access_token": tok}
 
 
 def _now_ms(offset_min=0):
@@ -49,29 +60,12 @@ def sample_user():
     return s, r.json()
 
 
-# --- Auth
+# --- Auth (login/register tests moved to test_iteration2_api.py)
 class TestAuth:
-    def test_register_login_me(self, user_a):
-        s, email, d = user_a
-        assert d["user"]["email"] == email
-        r = requests.post(f"{API}/auth/login", json={"email": email, "password": "pass1234"})
-        assert r.status_code == 200 and "access_token" in r.json()
-        me = s.get(f"{API}/auth/me")
-        assert me.status_code == 200 and me.json()["email"] == email
-
-    def test_me_401_and_bad_login(self, user_a):
+    def test_me_401_and_seeded_me(self, user_a):
         assert requests.get(f"{API}/auth/me").status_code == 401
         assert requests.get(f"{API}/auth/me", headers={"Authorization": "Bearer junk"}).status_code == 401
-        r = requests.post(f"{API}/auth/login", json={"email": user_a[1], "password": "wrong"})
-        assert r.status_code == 401
-
-    def test_duplicate_register(self, user_a):
-        r = requests.post(f"{API}/auth/register", json={"email": user_a[1], "password": "pass1234"})
-        assert r.status_code == 409
-
-    def test_demo_login(self):
-        r = requests.post(f"{API}/auth/login", json={"email": "demo@spendsense.in", "password": "demo1234"})
-        assert r.status_code == 200
+        assert user_a[0].get(f"{API}/auth/me").json()["email"] == user_a[1]
 
 
 # --- SMS ingest

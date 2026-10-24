@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pressable, Switch, TextInput, View } from "react-native";
+import { Platform, Pressable, Switch, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,6 +21,7 @@ export default function TransactionDetail() {
   const toast = useToast();
   const q = useQuery({ queryKey: ["tx", id], queryFn: () => api<Tx>(`/transactions/${id}`) });
   const [remember, setRemember] = useState(true);
+  const [rememberBiz, setRememberBiz] = useState(true);
   const [note, setNote] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
@@ -35,6 +36,12 @@ export default function TransactionDetail() {
           t.updated_others ? `Moved to ${t.category} · ${t.updated_others} other ${t.merchant} transactions updated` : `Moved to ${t.category}`,
           "success",
         );
+      else if (body.business !== undefined)
+        toast(
+          `Tagged ${body.business ? "Business" : "Personal"}${t.updated_others ? ` · ${t.updated_others} other ${t.merchant} transactions updated` : ""}`,
+          "success",
+        );
+      else if (body.recurring !== undefined) toast(body.recurring ? "Added to recurring bills" : "Removed from recurring", "success");
       else if (body.reimbursable !== undefined) toast(body.reimbursable ? "Marked reimbursable" : "Removed from reimbursable", "success");
       else toast("Saved", "success");
     },
@@ -47,25 +54,23 @@ export default function TransactionDetail() {
       toast("Transaction deleted");
       router.back();
     },
+    onError: (e: Error) => toast(e.message, "error"),
   });
-  const recurring = useMutation({
-    mutationFn: (t: Tx) =>
-      api("/recurring", {
-        method: "PUT",
-        body: { merchant_key: t.merchant_key, status: "active", merchant: t.merchant, amount: t.amount, day: dayjs(t.ts).date() },
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries();
-      toast("Added to recurring bills", "success");
-    },
-  });
-
   const t = q.data;
   const cats = t?.direction === "credit" ? INCOME_CATEGORIES : DEBIT_CATEGORIES;
 
   return (
     <View style={styles.root}>
-      <ScreenHeader title="Transaction" onBack={() => router.back()} topInset={insets.top} />
+      <ScreenHeader
+        title="Edit transaction"
+        onBack={() => router.back()}
+        topInset={Platform.OS === "ios" ? 8 : insets.top}
+        right={
+          <Pressable testID="tx-done-button" onPress={() => router.back()} hitSlop={8} style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: 12 }}>
+            <T v="label" style={{ color: colors.brandPrimary }}>Done</T>
+          </Pressable>
+        }
+      />
       {q.isLoading ? (
         <Loading />
       ) : q.isError || !t ? (
@@ -130,11 +135,52 @@ export default function TransactionDetail() {
               )}
             </Card>
 
+            {t.direction === "debit" && (
+              <Card style={{ gap: 12 }} testID="tx-business-card">
+                <T v="h2">Personal or Business</T>
+                <View style={styles.seg}>
+                  {([false, true] as const).map((b) => (
+                    <Pressable
+                      key={String(b)}
+                      testID={`tx-tag-${b ? "business" : "personal"}`}
+                      onPress={() => b !== t.business && patch.mutate({ business: b, apply_business_to_merchant: rememberBiz })}
+                      style={[styles.segItem, t.business === b && styles.segOn]}
+                    >
+                      <T v="label" style={{ color: t.business === b ? colors.onSurface : colors.muted }}>{b ? "Business" : "Personal"}</T>
+                    </Pressable>
+                  ))}
+                </View>
+                {t.merchant_key && (
+                  <View style={styles.switchRow}>
+                    <View style={{ flex: 1 }}>
+                      <T v="label">Same tag for all {t.merchant}</T>
+                      <T v="caption">Turn off for merchants you use for both, like food delivery</T>
+                    </View>
+                    <Switch testID="tx-remember-business-switch" value={rememberBiz} onValueChange={setRememberBiz} trackColor={{ true: colors.brandPrimary, false: colors.border }} />
+                  </View>
+                )}
+              </Card>
+            )}
+
             <Card style={{ gap: 12 }}>
+              {t.direction === "debit" && t.merchant_key && (
+                <View style={styles.switchRow}>
+                  <View style={{ flex: 1 }}>
+                    <T v="label">Recurring monthly</T>
+                    <T v="caption">Track it as a monthly bill and reserve it in safe-to-spend</T>
+                  </View>
+                  <Switch
+                    testID="tx-recurring-switch"
+                    value={!!t.is_recurring}
+                    onValueChange={(v) => patch.mutate({ recurring: v })}
+                    trackColor={{ true: colors.brandPrimary, false: colors.border }}
+                  />
+                </View>
+              )}
               <View style={styles.switchRow}>
                 <View style={{ flex: 1 }}>
                   <T v="label">Reimbursable / claimable</T>
-                  <T v="caption">Include in your work expense CSV export</T>
+                  <T v="caption">Include in your claim report PDF</T>
                 </View>
                 <Switch
                   testID="tx-reimbursable-switch"
@@ -159,10 +205,6 @@ export default function TransactionDetail() {
                 <Btn testID="tx-note-save-button" title="Save note" kind="secondary" loading={patch.isPending} onPress={() => patch.mutate({ note })} />
               )}
             </Card>
-
-            {t.direction === "debit" && t.merchant_key && (
-              <Btn testID="tx-mark-recurring-button" title="Mark as monthly recurring" kind="secondary" icon="repeat-outline" loading={recurring.isPending} onPress={() => recurring.mutate(t)} />
-            )}
 
             {t.raw.length > 0 && (
               <Card style={{ gap: 8 }}>
@@ -197,5 +239,8 @@ export default function TransactionDetail() {
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surface },
   switchRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  seg: { flexDirection: "row", backgroundColor: c.surfaceTertiary, borderRadius: 999, padding: 4 },
+  segItem: { flex: 1, minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 999 },
+  segOn: { backgroundColor: c.surfaceSecondary },
   raw: { backgroundColor: c.surfaceTertiary, padding: 12, borderRadius: 12, color: c.onSurface },
 }));

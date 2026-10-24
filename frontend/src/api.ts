@@ -45,6 +45,8 @@ export type Tx = {
   category: string;
   needs_review: boolean;
   reimbursable: boolean;
+  business: boolean;
+  is_recurring?: boolean;
   is_salary: boolean;
   source: string;
   merchant_key: string | null;

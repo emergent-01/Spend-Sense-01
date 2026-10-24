@@ -10,7 +10,7 @@ import { Btn, Card, Chip, Page, ScreenHeader, T, inputStyle } from "@/src/compon
 import { DEBIT_CATEGORIES, INCOME_CATEGORIES } from "@/src/format";
 import { makeStyles, useTheme } from "@/src/theme";
 import { useToast } from "@/src/toast";
-import { ingest, type IngestResult } from "@/src/sms";
+import { PastePreviewCard, type Preview } from "@/src/components/PastePreview";
 import { useLoadSample } from "@/src/use-sample";
 
 export default function Add() {
@@ -24,7 +24,8 @@ export default function Add() {
   const [tab, setTab] = useState<"paste" | "manual">("paste");
   const [sms, setSms] = useState("");
   const [sender, setSender] = useState("");
-  const [result, setResult] = useState<IngestResult | null>(null);
+  const [previews, setPreviews] = useState<Preview[] | null>(null);
+  const [batch, setBatch] = useState(0);
 
   const [direction, setDirection] = useState<"debit" | "credit">("debit");
   const [amount, setAmount] = useState("");
@@ -32,18 +33,18 @@ export default function Add() {
   const [category, setCategory] = useState("Food");
   const [date, setDate] = useState(dayjs().format("YYYY-MM-DD"));
   const [reimb, setReimb] = useState(false);
+  const [business, setBusiness] = useState(false);
   const [note, setNote] = useState("");
 
   const paste = useMutation({
     mutationFn: () => {
       // allow several SMS separated by blank lines
       const parts = sms.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
-      return ingest(parts.map((body) => ({ body, sender: sender.trim() })));
+      return api<{ items: Preview[] }>("/sms/preview", { method: "POST", body: { messages: parts.map((body) => ({ body, sender: sender.trim() })) } });
     },
     onSuccess: (r) => {
-      setResult(r);
-      qc.invalidateQueries();
-      if (r.created || r.merged) setSms("");
+      setPreviews(r.items);
+      setBatch((b) => b + 1);
     },
     onError: (e: Error) => toast(e.message, "error"),
   });
@@ -60,6 +61,7 @@ export default function Add() {
           date: dayjs(date).isValid() ? dayjs(date).hour(12).toISOString() : undefined,
           note,
           reimbursable: reimb,
+          business: direction === "debit" && business,
         },
       }),
     onSuccess: () => {
@@ -115,20 +117,10 @@ export default function Add() {
                 </View>
                 <Btn testID="paste-submit-button" title="Read SMS" icon="scan-outline" disabled={!sms.trim()} loading={paste.isPending} onPress={() => paste.mutate()} />
               </Card>
-              {result && (
-                <Card testID="paste-result" style={{ gap: 6 }}>
-                  <T v="label">
-                    {result.created ? `${result.created} transaction${result.created > 1 ? "s" : ""} added` : "No new transaction"}
-                  </T>
-                  {result.merged > 0 && <T v="caption">{result.merged} matched an existing transaction and was merged (card + UPI SMS).</T>}
-                  {result.review > 0 && <T v="caption" style={{ color: colors.warning }}>{result.review} couldn’t be fully read — sent to Needs review.</T>}
-                  {result.ignored > 0 && <T v="caption">{result.ignored} ignored (OTP, promo or non-transaction).</T>}
-                  {result.duplicate > 0 && <T v="caption">{result.duplicate} already imported earlier.</T>}
-                  {result.alerts.map((a: any) => (
-                    <T key={a.id} v="caption" style={{ color: colors.warning }}>⚑ {a.title}</T>
-                  ))}
-                </Card>
-              )}
+              {previews && previews.length === 0 && <T v="caption">Nothing to read — paste an SMS first.</T>}
+              {previews?.map((p, i) => (
+                <PastePreviewCard key={`${batch}-${i}`} item={p} index={i} />
+              ))}
               <Btn testID="add-load-sample-button" title="Load sample bank messages" kind="ghost" loading={sample.isPending} onPress={() => sample.mutate()} />
             </>
           ) : (
@@ -181,6 +173,15 @@ export default function Add() {
                   <Chip key={c} testID={`manual-category-${c}`} label={c} selected={category === c} onPress={() => setCategory(c)} />
                 ))}
               </View>
+              {direction === "debit" && (
+                <View style={styles.seg}>
+                  {([false, true] as const).map((b) => (
+                    <Pressable key={String(b)} testID={`manual-tag-${b ? "business" : "personal"}`} onPress={() => setBusiness(b)} style={[styles.segItem, business === b && styles.segOn]}>
+                      <T v="label" style={{ color: business === b ? colors.onSurface : colors.muted }}>{b ? "Business" : "Personal"}</T>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
               {direction === "debit" && (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                   <T v="label" style={{ flex: 1 }}>Reimbursable</T>

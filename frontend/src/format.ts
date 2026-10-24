@@ -5,7 +5,8 @@ export const SPEND_CATEGORIES = [
   "Food", "Groceries", "Transport", "Shopping", "Bills & Utilities",
   "Entertainment", "Health", "Travel", "Rent", "Other",
 ];
-export const DEBIT_CATEGORIES = [...SPEND_CATEGORIES, "Transfer"];
+export const P2P = "Transfer / P2P";
+export const DEBIT_CATEGORIES = [...SPEND_CATEGORIES, P2P];
 export const INCOME_CATEGORIES = ["Income", "Refund", "Transfer In"];
 
 export const CATEGORY_ICON: Record<string, string> = {
@@ -19,7 +20,7 @@ export const CATEGORY_ICON: Record<string, string> = {
   Travel: "airplane-outline",
   Rent: "home-outline",
   Other: "ellipsis-horizontal-circle-outline",
-  Transfer: "swap-horizontal-outline",
+  "Transfer / P2P": "people-outline",
   Income: "cash-outline",
   Refund: "return-down-back-outline",
   "Transfer In": "arrow-down-circle-outline",

@@ -176,13 +176,13 @@ def _merchant(body: str, vpa: Optional[str]) -> Optional[str]:
     for p in MERCHANT_PATTERNS:
         for m in p.finditer(body):
             cand = clean_merchant(m.group(1))
-            if cand and not re.match(r"^(A/C|AC|ACCT|CARD|YOUR|X+\d*)\b", cand):
+            if cand and not re.match(r"^(A/C|AC|ACCT|CARD|YOUR|X+\d*)\b", cand) and not re.search(r"\b(BANK|A/C|AC|ACCT)\b.*\b(X+\d+|\d{3,})\b", cand):
                 # avoid dates captured as merchant
                 if re.match(r"^\d{1,2}[\-/ ]", cand) or cand.lower()[:3] in MONTHS and re.search(r"\d", cand):
                     continue
                 return cand
     if vpa:
-        return clean_merchant(vpa)
+        return clean_merchant(vpa) or vpa.upper()[:40]
     return None
 
 
@@ -242,6 +242,20 @@ def categorize(merchant: Optional[str], body: str, direction: str) -> Optional[s
     return None
 
 
+BUSINESS_WORDS = re.compile(r"\b(store|stores|mart|enterprises?|traders?|services|foods?|shop|hotel|restaurant|medical|pharma|pvt|ltd|llp|agency|centre|center|motors|electronics|bazaar|kitchen|cafe|bakers?|sweets|textiles|garments|clinic|hospital|labs?|solutions|technologies|industries|co)\b", re.I)
+
+
+def looks_p2p(merchant: Optional[str], vpa: Optional[str], body: str) -> bool:
+    """Person-to-person UPI/IMPS transfer (paying a friend) rather than a merchant purchase."""
+    if vpa and re.match(r"^\d{10}(@|$)", vpa):
+        return True
+    if not merchant or BUSINESS_WORDS.search(merchant):
+        return False
+    words = merchant.split()
+    is_name = 2 <= len(words) <= 4 and all(re.fullmatch(r"[A-Z.]+", w) for w in words)
+    return is_name and bool(re.search(r"\b(sent|trf to|transfer(?:red)? to|paid to|imps|upi|p2a)\b", body, re.I))
+
+
 def parse_sms(sender: str, body: str, received_at: Optional[datetime] = None) -> dict:
     """Returns {'status': 'ignored'|'parsed'|'unparsed', ...fields}"""
     body = (body or "").strip()
@@ -261,6 +275,8 @@ def parse_sms(sender: str, body: str, received_at: Optional[datetime] = None) ->
     mode = "card" if card and re.search(r"card|\bcc\b", low) else ("upi" if re.search(r"\bupi\b|vpa|@", low) else
            ("netbanking" if re.search(r"neft|imps|rtgs|net ?banking", low) else ("atm" if "atm" in low else "account")))
     category = categorize(merchant, body, direction)
+    if category is None and direction == "debit" and looks_p2p(merchant, vpa, body):
+        category = "Transfer / P2P"
     if not merchant and category == "Income":
         merchant = "SALARY"
     return {

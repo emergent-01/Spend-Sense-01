@@ -1,6 +1,5 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, Query
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -12,7 +11,7 @@ from pathlib import Path
 from bson import ObjectId
 from cryptography.fernet import Fernet
 import os, re, io, csv, json, hmac, hashlib, logging, statistics
-import bcrypt, jwt
+import httpx, uuid
 
 from sms_parser import parse_sms, clean_merchant, CATEGORIES, INCOME_CATEGORIES, IST
 
@@ -21,10 +20,10 @@ load_dotenv(ROOT_DIR / '.env')
 
 client = AsyncIOMotorClient(os.environ['MONGO_URL'])
 db = client[os.environ['DB_NAME']]
-JWT_SECRET = os.environ['JWT_SECRET']
 FERNET = Fernet(os.environ['ENCRYPTION_KEY'].encode())
 HMAC_KEY = os.environ['ENCRYPTION_KEY'].encode()
-SPEND_EXCLUDED = ["Transfer"]
+P2P = "Transfer / P2P"
+SPEND_EXCLUDED = [P2P]
 ALL_DEBIT_CATEGORIES = CATEGORIES + SPEND_EXCLUDED
 
 app = FastAPI()
@@ -38,7 +37,6 @@ async def health():
     return {"status": "ok"}
 
 api = APIRouter(prefix="/api")
-bearer = HTTPBearer(auto_error=False)
 
 # ---------------------------------------------------------------- models / helpers
 PyObjectId = Annotated[str, BeforeValidator(lambda v: str(v) if isinstance(v, ObjectId) else v)]
@@ -62,9 +60,10 @@ class BaseDocument(BaseModel):
 
 
 class UserDoc(BaseDocument):
+    user_id: str
     email: str
-    password_hash: str
     name: Optional[str] = None
+    picture: Optional[str] = None
     monthly_income: float = 0
     savings_target: float = 0
     created_at: datetime
@@ -78,6 +77,7 @@ class TxDoc(BaseDocument):
     category: str
     needs_review: bool = False
     reimbursable: bool = False
+    business: bool = False
     is_salary: bool = False
     source: str = "sms"
     merchant_key: Optional[str] = None
@@ -132,7 +132,7 @@ def tx_out(doc: dict) -> dict:
     return {
         "id": t.id, "ts": aware(t.ts).isoformat(), "amount": t.amount, "direction": t.direction,
         "category": t.category, "needs_review": t.needs_review, "reimbursable": t.reimbursable,
-        "is_salary": t.is_salary, "source": t.source, "merchant_key": t.merchant_key,
+        "business": t.business, "is_salary": t.is_salary, "source": t.source, "merchant_key": t.merchant_key,
         "merchant": e.get("merchant") or ("Unknown payee" if t.direction == "debit" else "Unknown sender"),
         "vpa": e.get("vpa"), "card_last4": e.get("card_last4"), "account": e.get("account"),
         "bank": e.get("bank"), "mode": e.get("mode"), "note": e.get("note") or "",
@@ -150,70 +150,67 @@ def inr(v: float) -> str:
     return ("-" if v < 0 else "") + "₹" + s
 
 
-async def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer)) -> dict:
-    if not cred:
+async def current_user(request: Request) -> dict:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
         raise HTTPException(401, "Not authenticated")
-    try:
-        payload = jwt.decode(cred.credentials, JWT_SECRET, algorithms=["HS256"])
-        uid = payload["sub"]
-    except Exception:
-        raise HTTPException(401, "Invalid or expired token")
-    if not ObjectId.is_valid(uid):
-        raise HTTPException(401, "Invalid token")
-    user = await db.users.find_one({"_id": ObjectId(uid)})
+    token = auth[7:].strip()
+    s = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not s or aware(s["expires_at"]) < datetime.now(timezone.utc):
+        raise HTTPException(401, "Session expired, please sign in again")
+    user = await db.users.find_one({"user_id": s["user_id"]})
     if not user:
         raise HTTPException(401, "User not found")
-    user["id"] = str(user["_id"])
+    user["id"] = user["user_id"]
     return user
 
 
-def make_token(uid: str) -> str:
-    now = datetime.now(timezone.utc)
-    return jwt.encode({"sub": uid, "iat": now, "exp": now + timedelta(days=30)}, JWT_SECRET, algorithm="HS256")
-
-
 def user_out(u: dict) -> dict:
-    return {"id": str(u["_id"]), "email": u["email"], "name": u.get("name"),
+    return {"id": u["user_id"], "email": u["email"], "name": u.get("name"), "picture": u.get("picture"),
             "monthly_income": u.get("monthly_income", 0), "savings_target": u.get("savings_target", 0)}
 
-# ---------------------------------------------------------------- auth
-class RegisterIn(BaseModel):
-    email: str
-    password: str = Field(min_length=6, max_length=128)
-    name: Optional[str] = None
+# ---------------------------------------------------------------- auth (Emergent Google sign-in)
+EMERGENT_SESSION_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
 
-class LoginIn(BaseModel):
-    email: str
-    password: str
+class SessionIn(BaseModel):
+    session_id: str
 
 
-def norm_email(e: str) -> str:
-    e = e.strip().lower()
-    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
-        raise HTTPException(400, "Enter a valid email")
-    return e
+@api.post("/auth/session")
+async def create_session(body: SessionIn):
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(EMERGENT_SESSION_URL, headers={"X-Session-ID": body.session_id})
+    except httpx.HTTPError:
+        raise HTTPException(401, "Could not verify Google sign-in")
+    if r.status_code != 200:
+        raise HTTPException(401, "Invalid or expired sign-in session")
+    d = r.json()
+    email = (d.get("email") or "").strip().lower()
+    if not email or not d.get("session_token"):
+        raise HTTPException(401, "Invalid sign-in response")
+    user = await db.users.find_one({"email": email})
+    if user:  # link existing account (incl. former email/password users) by email
+        await db.users.update_one({"_id": user["_id"]}, {"$set": {
+            "name": user.get("name") or d.get("name"), "picture": d.get("picture"), "user_id": user.get("user_id") or str(user["_id"])}})
+    else:
+        u = UserDoc(user_id=f"user_{uuid.uuid4().hex[:12]}", email=email, name=d.get("name"), picture=d.get("picture"),
+                    created_at=datetime.now(timezone.utc))
+        await db.users.insert_one(u.to_mongo())
+    user = await db.users.find_one({"email": email})
+    now = datetime.now(timezone.utc)
+    await db.user_sessions.insert_one({"session_token": d["session_token"], "user_id": user["user_id"],
+                                       "expires_at": now + timedelta(days=7), "created_at": now})
+    return {"session_token": d["session_token"], "user": user_out(user)}
 
 
-@api.post("/auth/register", status_code=201)
-async def register(body: RegisterIn):
-    email = norm_email(body.email)
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(409, "Email already registered")
-    u = UserDoc(email=email, name=(body.name or "").strip() or None,
-                password_hash=bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode(),
-                created_at=datetime.now(timezone.utc))
-    res = await db.users.insert_one(u.to_mongo())
-    doc = await db.users.find_one({"_id": res.inserted_id})
-    return {"access_token": make_token(str(res.inserted_id)), "user": user_out(doc)}
-
-
-@api.post("/auth/login")
-async def login(body: LoginIn):
-    user = await db.users.find_one({"email": body.email.strip().lower()})
-    if not user or not bcrypt.checkpw(body.password.encode(), user["password_hash"].encode()):
-        raise HTTPException(401, "Invalid email or password")
-    return {"access_token": make_token(str(user["_id"])), "user": user_out(user)}
+@api.post("/auth/logout")
+async def logout(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        await db.user_sessions.delete_one({"session_token": auth[7:].strip()})
+    return {"ok": True}
 
 
 @api.get("/auth/me")
@@ -255,40 +252,52 @@ class IngestIn(BaseModel):
     messages: List[SmsIn]
 
 
-async def rule_category(uid: str, merchant_key: Optional[str]) -> Optional[str]:
-    if not merchant_key:
-        return None
-    r = await db.merchant_rules.find_one({"user_id": uid, "merchant_key": merchant_key})
-    return r["category"] if r else None
+def sms_hash(uid: str, sender: Optional[str], body: str) -> str:
+    return hashlib.sha256(f"{uid}|{(sender or '').upper()}|{body}".encode()).hexdigest()
 
 
-async def ingest_one(uid: str, m: SmsIn) -> str:
-    body = (m.body or "").strip()
-    if not body:
-        return "ignored"
-    h = hashlib.sha256(f"{uid}|{(m.sender or '').upper()}|{body}".encode()).hexdigest()
-    if await db.sms_seen.find_one({"user_id": uid, "hash": h}):
-        return "duplicate"
-    received = datetime.fromtimestamp(m.received_at / 1000, tz=timezone.utc) if m.received_at else None
-    p = parse_sms(m.sender or "", body, received)
-    await db.sms_seen.update_one({"user_id": uid, "hash": h}, {"$setOnInsert": {"user_id": uid, "hash": h}}, upsert=True)
-    if p["status"] == "ignored":
-        return "ignored"
-    if p["status"] == "unparsed":
-        await db.review_items.insert_one({
-            "user_id": uid, "enc": enc({"body": body, "sender": m.sender}), "reason": p.get("reason"),
-            "ts": received or datetime.now(timezone.utc), "created_at": datetime.now(timezone.utc)})
-        return "review"
-    mk = mkey(p["merchant"])
-    category = p["category"]
-    learned = await rule_category(uid, mk) if p["direction"] == "debit" else None
-    if learned:
-        category = learned
+def received_dt(ms: Optional[float]) -> Optional[datetime]:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc) if ms else None
+
+
+async def apply_rules(uid: str, p: dict, body: str):
+    """category / needs_review / business after learned merchant rules."""
+    mk = mkey(p.get("merchant"))
+    category, business = p.get("category"), False
+    rule = await db.merchant_rules.find_one({"user_id": uid, "merchant_key": mk}) if mk else None
+    if rule and p["direction"] == "debit":
+        category = rule.get("category") or category
+        business = bool(rule.get("business", False))
     needs_review = category is None
     category = category or "Other"
     if p["direction"] == "debit" and re.search(r"credit card (?:bill )?payment|payment (?:received )?towards your|cred club|self transfer|own account", body, re.I):
-        category, needs_review = "Transfer", False
-    # de-duplicate: card SMS + UPI SMS for one purchase (same amount, direction, within 10 min)
+        category, needs_review = P2P, False
+    return mk, category, needs_review, business
+
+
+async def learn_merchant(uid: str, mk: Optional[str], category: Optional[str] = None, business: Optional[bool] = None,
+                         exclude_id=None) -> int:
+    """Remember category and/or business tag for a merchant; apply to all its debit transactions."""
+    if not mk or (category is None and business is None):
+        return 0
+    s = {"updated_at": datetime.now(timezone.utc)}
+    tx_set = {}
+    if category is not None:
+        s["category"] = category
+        tx_set.update({"category": category, "needs_review": False})
+    if business is not None:
+        s["business"] = business
+        tx_set["business"] = business
+    await db.merchant_rules.update_one({"user_id": uid, "merchant_key": mk}, {"$set": s}, upsert=True)
+    q = {"user_id": uid, "merchant_key": mk, "direction": "debit"}
+    if exclude_id is not None:
+        q["_id"] = {"$ne": exclude_id}
+    r = await db.transactions.update_many(q, {"$set": tx_set})
+    return r.modified_count
+
+
+async def save_parsed(uid: str, p: dict, body: str, h: str, mk, category, needs_review, business, force=False):
+    """Insert a parsed SMS as a transaction, merging with a matching card/UPI twin. Returns (status, _id)."""
     ts = p["ts"]
     candidates = await db.transactions.find({
         "user_id": uid, "amount": p["amount"], "direction": p["direction"], "source": "sms",
@@ -298,27 +307,125 @@ async def ingest_one(uid: str, m: SmsIn) -> str:
         ce = dec(c["enc"])
         same_merchant = not c.get("merchant_key") or not mk or c.get("merchant_key") == mk
         diff_channel = (ce.get("mode") or "") != (p.get("mode") or "")
+        if force and c.get("merchant_key") and mk and c.get("merchant_key") != mk:
+            continue  # user-confirmed SMS never overwrites a different merchant's purchase
         if same_merchant or diff_channel:
             existing, e = c, ce
             break
     if existing:
         for f in ["merchant", "vpa", "card_last4", "account", "bank", "mode"]:
-            if not e.get(f) and p.get(f):
+            if (not e.get(f) or (force and f == "merchant")) and p.get(f):
                 e[f] = p[f]
         e["raw"] = (e.get("raw") or []) + [body]
         upd = {"enc": enc(e), "sms_hashes": existing.get("sms_hashes", []) + [h]}
-        if existing.get("needs_review") and not needs_review:
-            upd.update({"category": category, "needs_review": False})
-        if not existing.get("merchant_key") and mk:
+        if force or (existing.get("needs_review") and not needs_review):
+            upd.update({"category": category, "needs_review": needs_review})
+        if force:
+            upd["business"] = business
+        if (force or not existing.get("merchant_key")) and mk:
             upd["merchant_key"] = mk
         await db.transactions.update_one({"_id": existing["_id"]}, {"$set": upd})
-        return "merged"
+        return "merged", existing["_id"]
     t = TxDoc(user_id=uid, ts=ts, amount=p["amount"], direction=p["direction"], category=category,
-              needs_review=needs_review, is_salary=p["is_salary"], source="sms", merchant_key=mk, sms_hashes=[h],
+              needs_review=needs_review, business=business, is_salary=category == "Income", source="sms",
+              merchant_key=mk, sms_hashes=[h],
               enc=enc({k: p.get(k) for k in ["merchant", "vpa", "card_last4", "account", "bank", "mode"]} | {"raw": [body]}),
               created_at=datetime.now(timezone.utc))
-    await db.transactions.insert_one(t.to_mongo())
-    return "created"
+    res = await db.transactions.insert_one(t.to_mongo())
+    return "created", res.inserted_id
+
+
+async def ingest_one(uid: str, m: SmsIn) -> str:
+    body = (m.body or "").strip()
+    if not body:
+        return "ignored"
+    h = sms_hash(uid, m.sender, body)
+    if await db.sms_seen.find_one({"user_id": uid, "hash": h}):
+        return "duplicate"
+    received = received_dt(m.received_at)
+    p = parse_sms(m.sender or "", body, received)
+    await db.sms_seen.update_one({"user_id": uid, "hash": h}, {"$setOnInsert": {"user_id": uid, "hash": h}}, upsert=True)
+    if p["status"] == "ignored":
+        return "ignored"
+    if p["status"] == "unparsed":
+        await db.review_items.insert_one({
+            "user_id": uid, "enc": enc({"body": body, "sender": m.sender}), "reason": p.get("reason"),
+            "ts": received or datetime.now(timezone.utc), "created_at": datetime.now(timezone.utc)})
+        return "review"
+    mk, category, needs_review, business = await apply_rules(uid, p, body)
+    status, _ = await save_parsed(uid, p, body, h, mk, category, needs_review, business)
+    return status
+
+
+@api.post("/sms/preview")
+async def preview_sms(body: IngestIn, user=Depends(current_user)):
+    """Parse pasted SMS without saving, so the user can confirm/correct fields first."""
+    uid = user["id"]
+    out = []
+    for m in body.messages[:20]:
+        text = (m.body or "").strip()
+        if not text:
+            continue
+        received = received_dt(m.received_at)
+        p = parse_sms(m.sender or "", text, received)
+        item = {"body": text, "sender": m.sender or "", "received_at": m.received_at, "status": p["status"],
+                "duplicate": bool(await db.sms_seen.find_one({"user_id": uid, "hash": sms_hash(uid, m.sender, text)}))}
+        if p["status"] == "parsed":
+            mk, category, needs_review, business = await apply_rules(uid, p, text)
+            item.update({k: p.get(k) for k in ["amount", "direction", "merchant", "vpa", "card_last4", "account", "bank", "mode"]})
+            item.update({"category": category, "needs_review": needs_review, "business": business,
+                         "learned": bool(mk and await db.merchant_rules.find_one({"user_id": uid, "merchant_key": mk})),
+                         "ts": aware(p["ts"]).isoformat()})
+        else:
+            amt = re.search(r"(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)", text, re.I)
+            item.update({"amount": float(amt.group(1).replace(",", "")) if amt else None,
+                         "direction": "credit" if re.search(r"credited|received", text, re.I) else "debit",
+                         "merchant": None, "category": "Other", "business": False,
+                         "ts": aware(received or datetime.now(timezone.utc)).isoformat()})
+        out.append(item)
+    return {"items": out}
+
+
+class ConfirmIn(BaseModel):
+    body: str
+    sender: Optional[str] = ""
+    received_at: Optional[float] = None
+    amount: float = Field(gt=0)
+    direction: str
+    merchant: str = Field(min_length=1)
+    category: str
+    business: bool = False
+    learn: bool = True
+
+
+@api.post("/sms/confirm", status_code=201)
+async def confirm_sms(body: ConfirmIn, user=Depends(current_user)):
+    uid = user["id"]
+    text = body.body.strip()
+    if body.direction not in ("debit", "credit"):
+        raise HTTPException(400, "direction must be debit or credit")
+    valid_category(body.direction, body.category)
+    h = sms_hash(uid, body.sender, text)
+    if await db.sms_seen.find_one({"user_id": uid, "hash": h}):
+        raise HTTPException(409, "This SMS was already added")
+    received = received_dt(body.received_at)
+    p = parse_sms(body.sender or "", text, received)
+    parsed_mk = mkey(p.get("merchant")) if p["status"] == "parsed" else None
+    if p["status"] != "parsed":
+        p = {"ts": received or datetime.now(timezone.utc), "mode": "manual"}
+    merchant = clean_merchant(body.merchant) or body.merchant.strip().upper()[:40]
+    p.update({"amount": round(body.amount, 2), "direction": body.direction, "merchant": merchant})
+    mk = mkey(merchant)
+    await db.sms_seen.update_one({"user_id": uid, "hash": h}, {"$setOnInsert": {"user_id": uid, "hash": h}}, upsert=True)
+    status, tid = await save_parsed(uid, p, text, h, mk, body.category, False, body.business, force=True)
+    learned = 0
+    if body.learn and body.direction == "debit":
+        learned = await learn_merchant(uid, mk, body.category, body.business, exclude_id=tid)
+        if parsed_mk and parsed_mk != mk:  # renamed in preview: future SMS still carry the bank's merchant name
+            learned += await learn_merchant(uid, parsed_mk, body.category, body.business, exclude_id=tid)
+    alerts = await run_alert_checks(user)
+    return {"status": status, "learned_others": learned, "alerts": alerts,
+            "transaction": tx_out(await db.transactions.find_one({"_id": tid}))}
 
 
 @api.post("/sms/ingest")
@@ -386,12 +493,16 @@ class TxCreate(BaseModel):
     date: Optional[str] = None
     note: Optional[str] = ""
     reimbursable: bool = False
+    business: bool = False
 
 
 class TxPatch(BaseModel):
     category: Optional[str] = None
     apply_to_merchant: bool = False
+    business: Optional[bool] = None
+    apply_business_to_merchant: bool = False
     reimbursable: Optional[bool] = None
+    recurring: Optional[bool] = None
     note: Optional[str] = None
     merchant: Optional[str] = None
 
@@ -419,6 +530,10 @@ async def list_transactions(month: Optional[str] = None, q: Optional[str] = None
         query["direction"] = "credit"
     elif filter == "expense":
         query["direction"] = "debit"
+    elif filter == "business":
+        query.update({"business": True, "direction": "debit"})
+    elif filter == "personal":
+        query.update({"business": {"$ne": True}, "direction": "debit"})
     docs = await db.transactions.find(query).sort("ts", -1).to_list(min(limit, 2000))
     items = [tx_out(d) for d in docs]
     if q:
@@ -433,7 +548,14 @@ async def get_transaction(tid: str, user=Depends(current_user)):
     d = await db.transactions.find_one({"_id": ObjectId(tid), "user_id": user["id"]}) if ObjectId.is_valid(tid) else None
     if not d:
         raise HTTPException(404, "Transaction not found")
-    return tx_out(d)
+    return await tx_detail(user["id"], d)
+
+
+async def tx_detail(uid: str, d: dict) -> dict:
+    out = tx_out(d)
+    mk = d.get("merchant_key")
+    out["is_recurring"] = bool(mk) and any(r["merchant_key"] == mk and r["status"] == "active" for r in await compute_recurring(uid))
+    return out
 
 
 @api.post("/transactions", status_code=201)
@@ -449,7 +571,8 @@ async def create_transaction(body: TxCreate, user=Depends(current_user)):
             raise HTTPException(400, "Invalid date")
     merchant = clean_merchant(body.merchant) or body.merchant.strip().upper()[:40]
     t = TxDoc(user_id=user["id"], ts=ts, amount=round(body.amount, 2), direction=body.direction, category=body.category,
-              reimbursable=body.reimbursable, is_salary=body.category == "Income", source="manual",
+              reimbursable=body.reimbursable, business=body.business and body.direction == "debit",
+              is_salary=body.category == "Income", source="manual",
               merchant_key=mkey(merchant), enc=enc({"merchant": merchant, "note": body.note, "mode": "manual"}),
               created_at=datetime.now(timezone.utc))
     res = await db.transactions.insert_one(t.to_mongo())
@@ -465,7 +588,7 @@ async def patch_transaction(tid: str, body: TxPatch, user=Depends(current_user))
     upd, e = {}, dec(d["enc"])
     updated_others = 0
     if body.merchant is not None and body.merchant.strip():
-        e["merchant"] = body.merchant.strip().upper()[:40]
+        e["merchant"] = clean_merchant(body.merchant) or body.merchant.strip().upper()[:40]
         upd["merchant_key"] = mkey(e["merchant"])
     if body.note is not None:
         e["note"] = body.note[:300]
@@ -476,19 +599,29 @@ async def patch_transaction(tid: str, body: TxPatch, user=Depends(current_user))
     if body.category:
         valid_category(d["direction"], body.category)
         upd.update({"category": body.category, "needs_review": False, "is_salary": body.category == "Income"})
-        mk = upd.get("merchant_key") or d.get("merchant_key")
-        if body.apply_to_merchant and mk and d["direction"] == "debit":
-            await db.merchant_rules.update_one({"user_id": user["id"], "merchant_key": mk},
-                                               {"$set": {"category": body.category, "updated_at": datetime.now(timezone.utc)}}, upsert=True)
-            r = await db.transactions.update_many(
-                {"user_id": user["id"], "merchant_key": mk, "direction": "debit", "_id": {"$ne": d["_id"]}},
-                {"$set": {"category": body.category, "needs_review": False}})
-            updated_others = r.modified_count
+    mk = upd.get("merchant_key") or d.get("merchant_key")
+    if body.business is not None:
+        if d["direction"] != "debit":
+            raise HTTPException(400, "Only expenses can be tagged Personal or Business")
+        upd["business"] = body.business
+    if d["direction"] == "debit" and mk:
+        updated_others = await learn_merchant(
+            user["id"], mk,
+            category=body.category if body.category and body.apply_to_merchant else None,
+            business=body.business if body.business is not None and body.apply_business_to_merchant else None,
+            exclude_id=d["_id"])
+    if body.recurring is not None:
+        if not mk:
+            raise HTTPException(400, "This transaction has no merchant to track as recurring")
+        s = {"status": "active" if body.recurring else "ignored", "updated_at": datetime.now(timezone.utc)}
+        if body.recurring:
+            s.update({"merchant": e.get("merchant"), "amount": d["amount"], "day": aware(d["ts"]).astimezone(IST).day})
+        await db.recurring_overrides.update_one({"user_id": user["id"], "merchant_key": mk}, {"$set": s}, upsert=True)
     if upd:
         await db.transactions.update_one({"_id": d["_id"]}, {"$set": upd})
-    if body.category:
+    if body.category or body.recurring is not None:
         await run_alert_checks(user)
-    out = tx_out(await db.transactions.find_one({"_id": d["_id"]}))
+    out = await tx_detail(user["id"], await db.transactions.find_one({"_id": d["_id"]}))
     out["updated_others"] = updated_others
     return out
 
@@ -803,9 +936,13 @@ async def overview(month: Optional[str] = None, user=Depends(current_user)):
         await db.transactions.count_documents({"user_id": uid, "needs_review": True})
     unread = await db.alerts.count_documents({"user_id": uid, "read": False, "hidden": {"$ne": True}})
     recent = await db.transactions.find({"user_id": uid}).sort("ts", -1).to_list(5)
+    split = await db.transactions.aggregate([
+        {"$match": {"user_id": uid, "direction": "debit", "category": {"$nin": SPEND_EXCLUDED}, "ts": {"$gte": s, "$lt": e}}},
+        {"$group": {"_id": {"$eq": ["$business", True]}, "total": {"$sum": "$amount"}}}]).to_list(2)
+    business_spent = round(sum(r["total"] for r in split if r["_id"]), 2)
     by_cat = sorted([{"category": k, "spent": v["total"], "count": v["count"]} for k, v in spend.items() if k not in SPEND_EXCLUDED],
                     key=lambda x: -x["spent"])
-    return {"month": m, "income": income, "income_recorded": recorded, "income_expected": expected,
+    return {"month": m, "business_spent": business_spent, "personal_spent": round(spent - business_spent, 2), "income": income, "income_recorded": recorded, "income_expected": expected,
             "income_source": "recorded" if recorded > 0 else "expected", "spent": spent, "committed": committed,
             "savings_target": savings, "safe_to_spend": safe, "daily_safe": round(safe / days_left, 2) if days_left and safe > 0 else 0,
             "days_left": days_left, "day": day, "days_in_month": dim, "by_category": by_cat, "budgets": budgets,
@@ -843,6 +980,13 @@ app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=["*"],
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
+    async for u in db.users.find({"user_id": {"$exists": False}}):  # migrate pre-Google accounts
+        await db.users.update_one({"_id": u["_id"]}, {"$set": {"user_id": str(u["_id"])}})
+    await db.users.create_index("user_id", unique=True)
+    await db.user_sessions.create_index("session_token", unique=True)
+    await db.user_sessions.create_index("user_id")
+    await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
+    await db.transactions.update_many({"category": "Transfer"}, {"$set": {"category": P2P}})
     await db.transactions.create_index([("user_id", 1), ("ts", -1)])
     await db.transactions.create_index([("user_id", 1), ("merchant_key", 1)])
     await db.sms_seen.create_index([("user_id", 1), ("hash", 1)], unique=True)

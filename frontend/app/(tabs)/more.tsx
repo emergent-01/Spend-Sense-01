@@ -111,7 +111,7 @@ export default function More() {
               sub={review.data ? `${review.data.count} waiting` : "Unparsed or uncategorised"}
               onPress={() => router.push("/review")}
             />
-            <Row testID="more-export-link" icon="download-outline" title="Reimbursable export" sub="CSV for work expense claims" onPress={() => router.push("/export")} />
+            <Row testID="more-export-link" icon="document-text-outline" title="Claim report PDF" sub="Reimbursable spends with bank SMS proof" onPress={() => router.push("/export")} />
             <Row testID="more-alerts-link" icon="notifications-outline" title="Alerts" sub="Budget, recurring and weekly summaries" onPress={() => router.push("/alerts")} />
           </Card>
 
@@ -143,7 +143,7 @@ export default function More() {
             </T>
           </View>
 
-          <Btn testID="sign-out-button" title="Sign out" kind="danger" icon="log-out-outline" onPress={async () => { await signOut(); router.replace("/login"); }} />
+          <Btn testID="sign-out-button" title="Sign out" kind="danger" icon="log-out-outline" onPress={() => signOut()} />
         </Page>
       </KeyboardAwareScrollView>
     </View>

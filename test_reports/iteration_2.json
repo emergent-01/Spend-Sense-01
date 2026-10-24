@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 2 tested on backend and frontend. Backend: 26 of 26 pytest tests passed. That is 14 new tests in test_iteration2_api.py plus 12 tests in test_spendsense_api.py, which I moved to sessions seeded directly in Mongo. Covered: Google-session auth (session/me/logout, old login and register routes now return 404/405), SMS preview (nothing saved; duplicate/learned/status flags), SMS confirm (user corrections, 409 on the same SMS twice, merchant learning of category + business tag applied to past and future SMS), PATCH (business with and without apply-to-merchant, category with apply_to_merchant, recurring on/off reflected in GET tx and GET /recurring, 404/400), personal/business filters, overview personal_spent + business_spent = spent, and P2P detection (named person, phone VPA, 'To RAHUL SHARMA') excluded from spent. Frontend (375x667 web preview): the login screen shows only 'Continue with Google' with no inputs. Signing in via localStorage token works. Home split cards open Activity with the matching filter. Activity chips and totals work. The edit sheet works for category + remember, business + remember, recurring and reimbursable, each showing the correct toast and saving. The paste flow works: preview card, tap-to-edit amount and merchant, category and tag changes, save, a duplicate card on re-paste, and multiple SMS in one paste including P2P. The claim report iframe has the summary table and the original SMS proof, and the toast shows. Sign out clears the token and the server session and returns to /login. No deprecated Expo packages and no SafeAreaView issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/sms/confirm (learn=true)", "issue": "If the user edits the merchant name in the preview (e.g. parsed 'UBER' -> 'UBER RIDES'), the rule is saved under the edited name's key. A later SMS that parses as 'UBER' gets learned=false and keeps the default category and personal tag. Verified: confirmed UBER RIDES as Travel+Business, then previewed a new UBER SMS and got Transport, business=False."},
+      {"endpoint": "PATCH /api/transactions/{id}", "issue": "A merchant rename uses .strip().upper()[:40] instead of clean_merchant(), so it is not consistent with POST /transactions and /sms/confirm. business=true is also accepted on credit transactions; create already blocks this with 'business and direction==debit'."},
+      {"endpoint": "save_parsed(force=True) via /sms/confirm", "issue": "The merge looks for any SMS transaction with the same amount within ±10 min on a different channel, even if the merchant differs. Two different ₹X purchases (card and UPI) within 10 minutes would be merged, and force=True then overwrites the merchant, category and business of the existing transaction."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Activity filter chips", "issue": "When Activity opens from Home > Business (filter=business), the selected 'Business' chip is off-screen in the horizontal chip row at 375px, so the active filter is not visible. The 'Personal' chip is also cut off.", "testID": "activity-filter-business", "priority": "low"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home", "issues": ["The floating 'Add / Paste SMS' button covers part of the Budgets card (Food progress bar) at 375x667."]},
+      {"screen": "Activity", "issues": ["Under the Business filter, the totals row shows 'Personal ₹0' because totals are calculated from the filtered list. This can be misleading; consider hiding the opposite total when a personal or business filter is on.", "Day section totals (line 65) include Transfer / P2P debits, but the 'Spent' total leaves them out. The two are inconsistent."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration2_api.py", "/app/backend/tests/test_spendsense_api.py", "/app/backend/tests/seed_ui_user.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Merchant learning when the merchant is renamed in the paste preview: also save the rule under the parsed merchant's key (mkey of the original parsed merchant), so future SMS from the same merchant get the learned category and tag.",
+    "PATCH /transactions merchant rename: use clean_merchant(). Ignore or reject business=true on credit transactions.",
+    "Optional: in save_parsed, require the same merchant (or a missing merchant key) before merging when force=True, so a different purchase is not overwritten.",
+    "Activity: scroll the selected filter chip into view when the screen opens with ?filter=. Consider hiding the 'Personal ₹0' / 'Business ₹0' total when filtered.",
+    "Web claim report: frame.remove() runs 1s after print(). This is fine in Chrome, where print() blocks, but it may cut off the print preview in Firefox/Safari. Consider removing the frame on the 'afterprint' event.",
+    "Transaction delete mutation (app/transaction/[id].tsx:50) has no onError toast."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 993 lines (more than 700). Split it into routers: auth, ingest, transactions, budgets/recurring, overview/export.",
+    "The old ValueError in month_bounds (int('xx')) seen in backend.err.log is already fixed by the regex check; invalid months now return 400."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration2_api.py (new)", "/app/backend/tests/seed_ui_user.py (new)", "/app/backend/tests/test_spendsense_api.py (_register now seeds a Mongo user+session; removed obsolete login/register tests)"],
+  "success_rate": {"backend": "100% (26/26)", "frontend": "100% of requested flows passed; 1 low-priority UI issue and a few design issues"},
+  "seed_data_creation": "Temporary TEST_ users and sessions were created in Mongo and all removed afterwards. The demo session test_session_demo_spendsense was never logged out and is still valid (expires 2026-12-23). The demo user's data was only read, not changed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run the tests with: pytest /app/backend/tests -n 0 (pytest.ini enables xdist; module fixtures break under parallel workers). For UI tests, run python /app/backend/tests/seed_ui_user.py, which creates TEST_ui_user with token TEST_ui_session_token and sample data. Then run localStorage.setItem('auth_token', JSON.stringify('TEST_ui_session_token')). Use this user for sign-out tests so the demo session is not deleted. The category list is Food, Groceries, Transport, Shopping, Bills & Utilities, Entertainment, Health, Travel, Rent, Other, Transfer / P2P (no 'Food & Dining'). The container date is Oct 2026.",
+  "rca_of_issue": "Merchant-rename learning gap: confirm_sms computes mk = mkey(edited merchant) and learn_merchant upserts the rule under that key only. apply_rules later looks up mkey(parsed merchant), which is the original name, so it finds no rule."
+}
