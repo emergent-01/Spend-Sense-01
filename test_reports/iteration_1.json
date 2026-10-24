@@ -1,0 +1,50 @@
+{
+  "summary": "First full test of SpendSense. Backend: 14/15 pytest pass (auth, SMS parse/ignore/review/duplicate, card+UPI merge, sample loader, tx filters/search, recategorize+learned merchant rule incl. future SMS, reimbursable CSV export, budgets + 70%/100% alerts with 'on day N of the month' pace text, safe-to-spend math + settings, recurring detection Netflix/NoBroker/Cult + cancel/ignore, review resolve/dismiss, user isolation). Only failure: invalid month param returns 500. Exploratory probes found a dedupe over-merge bug (2 different merchants with the same amount within 10 min get merged, so one transaction is lost) and an Axis credit card SMS format where the merchant isn't parsed. Frontend (390x844): every requested flow works end to end: login/register/error, Home cards + FAB + deep links, Activity search/filters/category/month nav, tx detail (category + remember, reimbursable, note save, delete confirm/cancel), Budgets sheet save, More income/savings save (safe-to-spend updates correctly), links, sign out, Add paste SMS (created/OTP ignored) + manual entry, Review resolve + quick categorize, Recurring cancel, Alerts list, Export CSV download (correct columns/content). No red screens or page errors. No deprecated Expo packages detected. No SafeAreaView issues detected.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/sms/ingest (ingest_one dedupe)", "issue": "Dedupe merges ANY two debit SMS with the same amount within 10 min, even when merchants differ and the channel is the same. Repro: HDFC card Rs.200 at STARBUCKS, then HDFC card Rs.200 at CHAAYOS 3 min later -> created=1, merged=1, so the CHAAYOS spend is lost. Only merge when merchants match / merchant_keys are compatible (one missing) or channels differ (card vs UPI). Also skip the merge when both have different card_last4/account. Reference: /app/backend/server.py:290-306", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/transactions, /api/overview, /api/budgets, /api/export/reimbursable", "issue": "Invalid month param (e.g. month=bad, 2026-13, xx) throws ValueError in month_bounds -> 500. Validate YYYY-MM and return 400. server.py:115-120"},
+      {"endpoint": "sms_parser (Axis CC)", "issue": "'Spent INR 2,345.00 Axis Bank Card no. XX9012 24-10-26 14:22:10 IST PVR CINEMAS Avl Limit: INR 90,000' -> merchant 'Unknown payee', needs_review. Merchant after 'IST' isn't extracted."},
+      {"endpoint": "sms_parser (salary)", "issue": "NEFT salary credit 'NEFT Cr-CITI0000001-ACME CORP SALARY' gets merchant 'SALARY' instead of the employer 'ACME CORP'."},
+      {"endpoint": "sms_parser (cc bill)", "issue": "'Rs.15000.00 debited from HDFC Bank A/c XX1234 ... towards credit card bill payment' gets mode 'card' although it's an account debit. Category Transfer is correct."},
+      {"endpoint": "weekly summary alert", "issue": "Weekly summary is created once per ISO week at the first check, so it can say 'All budgets on track' while a 'Food budget exceeded' alert exists the same day (stale snapshot)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Review screen unparsed card", "issue": "Amount + Merchant TextInput row overflows the card's right edge on 390px web, so the Merchant input is clipped. Add minWidth: 0 to both inputs (RN-web TextInput has an intrinsic width). Reference: /app/frontend/app/review.tsx:129-146", "testID": "unparsed-merchant-{id}", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home (new user, empty)", "issues": ["Safe-to-spend card shows ₹0 with 'You're past your safe limit for this month' before any income or transactions exist. This is misleading; show a neutral 'Set your income to see safe-to-spend' message. (app/(tabs)/index.tsx:87)"]},
+      {"screen": "Add > Paste SMS", "issues": ["The result card only shows counts ('1 transaction added'). Consider showing the parsed amount/merchant/category, plus a link to the created tx so the user can verify or recategorize."]},
+      {"screen": "Desktop web dashboard (1920)", "issues": ["Content column is centered (~760px), but the FAB is pinned to the far right viewport edge, away from the content."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_spendsense_api.py", "/app/backend/tests/probe_edge.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "HIGH: Fix the dedupe over-merge in server.py ingest_one. Require a compatible merchant, or a different channel (card vs UPI), before merging same-amount SMS within 10 min.",
+    "Validate the month query param (YYYY-MM) and return 400 instead of 500 across transactions/overview/budgets/export.",
+    "Review screen: add minWidth:0 to the unparsed amount/merchant TextInputs so they don't overflow on web.",
+    "Home empty state: don't show 'past your safe limit' when income is 0 and there's no data.",
+    "Parser: Axis CC 'Spent INR ... IST <MERCHANT> Avl Limit' merchant extraction; salary employer name; mode for A/c debits used for CC bill payment.",
+    "Optional: regenerate or refresh the weekly summary when budgets change; show parsed details in the paste result card.",
+    "Code quality: server.py is 847 lines (>700). Split it into routers (auth, ingest, transactions, budgets/alerts, recurring, export)."
+  ],
+  "critical_code_review_comments": [
+    "server.py ingest_one dedupe query ignores merchant/channel, which causes data loss for repeated same-amount purchases (common: two Rs.200 coffees, two Rs.50 UPI chai).",
+    "month_bounds() has no validation; int() on malformed input raises an unhandled 500.",
+    "server.py exceeds 700 lines; split into modules.",
+    "TxPatch.apply_to_merchant defaults to True. Any API client sending only {category} silently creates a merchant rule and rewrites all past txs of that merchant. Consider defaulting to False server-side (the UI sends it explicitly)."
+  ],
+  "updated_files": ["/app/backend/tests/test_spendsense_api.py", "/app/backend/tests/probe_edge.py"],
+  "success_rate": {"backend": "93% (14/15 pytest); plus 1 HIGH dedupe bug found via probe", "frontend": "~95% (all flows functional; 1 layout overflow bug, minor design issues)"},
+  "seed_data_creation": "Registered several test_*@example.com users via API (some with sample data loaded) and test_ui_db0b8c@example.com / pass1234 via UI (sample loaded, Food budget 3000, income 100000/savings 20000, UBER marked reimbursable as Travel, NoBroker rent marked cancelled). Demo user was not modified except being viewed.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: EXPO_PUBLIC_BACKEND_URL=<from frontend/.env> pytest /app/backend/tests/test_spendsense_api.py. probe_edge.py is an exploratory script (python file, prints results) for parser/dedupe edge cases. Frontend env key is EXPO_PUBLIC_BACKEND_URL. In Activity, the tx-row-* testIDs also exist in Home's recent list (still mounted), so scope to '[data-testid=\"activity-list\"] [data-testid^=\"tx-row-\"]'. Budget sheet slides in; wait ~1.5s before clicking budget-save-button. Playwright browser runs in UTC, so displayed times are UTC.",
+  "rca_of_issue": "Dedupe: server.py:291-293 finds an existing tx by user_id+amount+direction+source+ts±10min only, so any second SMS of the same amount within the window is treated as the same purchase. Mitigation: add the condition that merchant_key is equal or one is null, and the modes differ (card vs upi), or that the bodies come from different senders/banks."
+}

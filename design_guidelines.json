@@ -1,0 +1,161 @@
+{
+  "app_name": "SpendSense",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A trustworthy, highly readable financial command center that prioritizes clarity, calm spacing, and automated peace of mind over raw data density.",
+  "color": {
+    "surface": "#FDFDFB",
+    "onSurface": "#1C1F1D",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1C1F1D",
+    "surfaceTertiary": "#F4F5F0",
+    "onSurfaceTertiary": "#4A7856",
+    "surfaceInverse": "#1C1F1D",
+    "onSurfaceInverse": "#FDFDFB",
+    "brand": "#4A7856",
+    "onBrand": "#FFFFFF",
+    "brandPrimary": "#4A7856",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#C9D8CB",
+    "onBrandSecondary": "#1C1F1D",
+    "brandTertiary": "#E7EFE8",
+    "onBrandTertiary": "#4A7856",
+    "success": "#3E7754",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D18D27",
+    "onWarning": "#FFFFFF",
+    "error": "#BC4B42",
+    "onError": "#FFFFFF",
+    "info": "#1C1F1D",
+    "onInfo": "#FFFFFF",
+    "border": "#EAECE5",
+    "borderStrong": "#C9D8CB",
+    "divider": "#EAECE5",
+    "muted": "#6D736F"
+  },
+  "typography": {
+    "displayFontFamily": "Space Grotesk",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical breathing room. Use 'md' or 'lg' around content, clear grouping for financial figures. Avoid dense dashboards unless in the 'Budgets' grid.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 1,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Sticky headers over scrolling lists in Activity and Budgets.",
+      "Bottom tab bar.",
+      "Hero background card for Safe-to-Spend over the abstract green image.",
+      "Floating action button (FAB) for manual/pasted SMS entry."
+    ],
+    "dont's": [
+      "Every single list row.",
+      "Forms or settings pages.",
+      "Body content areas."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Home",
+      "purpose": "A high-level summary emphasizing 'Safe-to-Spend' and urgent items needing review.",
+      "states": {
+        "loading": "Skeleton overlay over the Safe-to-Spend hero ring and ghost rows for recent transactions.",
+        "empty": "Illustration of a serene setup, prompting the user to grant SMS permission or wait for their first transaction.",
+        "error": "Card displaying 'Unable to read recent SMS' with a primary retry CTA."
+      },
+      "layout": "Top layer: Hero card overlapping an abstract green background. Inside the card: Large Safe-to-Spend metric using the display font, with a breakdown ring showing Income minus (Recurring + Savings + Spent). Middle layer: 'Needs Review' queue card highlighted with a subtle `warning` border and prompt to categorize unknown spends. Bottom layer: Preview of 'Recent Activity' with a button to view all. Floating FAB (glassmorphic) at the bottom right for manual entry/paste SMS."
+    },
+    {
+      "name": "Activity",
+      "purpose": "A clean, searchable, and filterable transaction history.",
+      "states": {
+        "loading": "Full screen list of skeleton rows grouped by date.",
+        "empty": "Empty state illustration with text 'No transactions logged yet'.",
+        "error": "Readable text indicating a sync or parser error, with a Retry button."
+      },
+      "layout": "Sticky glass header containing a Search bar and horizontal scrollable pill-tabs (All, Needs Review, Reimbursable, Income). Content is a SectionList grouped by Date (Sticky section headers). Each row has an icon container (brandTertiary), merchant/bank name, time, and right-aligned amount. Reimbursable items show a small tag/badge."
+    },
+    {
+      "name": "Budgets",
+      "purpose": "Monitor category-specific spending limits and pace alerts.",
+      "states": {
+        "loading": "Skeleton grid cards for categories.",
+        "empty": "Empty state illustration prompting the user to set up their first category budget.",
+        "error": "Error message with a primary retry CTA."
+      },
+      "layout": "Grid of cards (2 columns). Each card shows a category icon, Title, 'Spent / Total', and a progress bar. Progress bar color dynamically changes (brandPrimary normally, warning for >80%, error for 100%). At the top, a horizontal summary chart comparing total monthly budget vs actuals."
+    },
+    {
+      "name": "More",
+      "purpose": "Manage rules, recurring items, and app configuration.",
+      "states": {
+        "loading": "Skeleton list rows.",
+        "empty": "N/A - static settings list.",
+        "error": "Error state for failing to load user configuration."
+      },
+      "layout": "Standard iOS-style grouped list. Group 1: Income & Savings Target (Editable fields). Group 2: Recurring Bills (List of detected subscriptions). Group 3: SMS Parser Configuration (Explainer/Permissions). Group 4: Export (CSV download CTA)."
+    }
+  ],
+  "images": {
+    "hero_background": {
+      "url": "https://images.unsplash.com/photo-1693389107440-afe980ccbb8d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGdyZWVuJTIwc29mdCUyMGFlc3RoZXRpY3xlbnwwfHx8fDE3OTI4MjA3MjF8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Abstract soft green background aesthetic"
+    },
+    "hdfc_logo_fallback": {
+      "url": "",
+      "alt": "HDFC bank logo transparent - fallback to initials 'HDFC' inside a brandTertiary circle"
+    },
+    "sbi_logo_fallback": {
+      "url": "",
+      "alt": "SBI bank logo transparent - fallback to initials 'SBI' inside a brandTertiary circle"
+    },
+    "icici_logo_fallback": {
+      "url": "",
+      "alt": "ICICI bank logo transparent - fallback to initials 'ICICI' inside a brandTertiary circle"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the WCAG AA accessibility rules. Maintain the 500-weight maximum across all typography. DO NOT use ultra-bold or black font weights.",
+    "Implement the gradient scrim pattern (transparent -> 20% surfaceInverse -> 70% surfaceInverse) whenever text overlays the `hero_background` image.",
+    "BANNED COLORS: No blue, navy, indigo, or purple. The app relies on a Moss Green (brand) and Ochre/Terracotta (alerts) palette. Do not inject default material blues.",
+    "Make the FAB sticky above the safe area on the Home screen. Use a glass effect background for it.",
+    "Transactions that need review should be visibly distinct (e.g., using a subtle Ochre border or a 'Needs Review' badge).",
+    "For bank logos (HDFC, SBI, ICICI), attempt to use real transparent logos if available. Since the selector failed to find clean corporate vectors, fallback to using their initials (e.g., 'HDFC') rendered in text (weight 500) inside a `brandTertiary` circle. Do not use generic bank icons.",
+    "Ensure touch targets are a minimum of 44x44pt.",
+    "Make sure the Reimbursable flag is toggleable directly from the transaction detail view."
+  ]
+}
